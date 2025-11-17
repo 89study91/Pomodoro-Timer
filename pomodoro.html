@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pomodoro Ultra-Flex</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            background-color: #282c34;
+            color: white;
+            margin: 0;
+            padding: 20px;
+            text-align: center;
+        }
+        .container {
+            background-color: #3c414c;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+            width: 90%;
+            max-width: 500px;
+        }
+        #timerDisplay {
+            font-size: 6em;
+            font-weight: bold;
+            margin: 20px 0;
+            transition: color 0.5s;
+        }
+        #phaseDisplay {
+            font-size: 1.5em;
+            margin-bottom: 20px;
+        }
+        .controls, .flex-controls {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin-top: 15px;
+            flex-wrap: wrap;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 1em;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+            color: white;
+        }
+        #startStopBtn { background-color: #61afef; }
+        #startStopBtn:hover { background-color: #529ecc; }
+
+        .skip-btn { background-color: #e06c75; }
+        .skip-btn:hover { background-color: #c95059; }
+
+        .flex-btn { background-color: #98c379; }
+        .flex-btn:hover { background-color: #88af6a; }
+        
+        #currentCycle {
+            margin-top: 10px;
+            font-size: 1.2em;
+        }
+
+        #accumulatedBreakTime {
+            margin-top: 10px;
+            font-size: 1.1em;
+            color: #c678dd;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2 id="phaseDisplay">Focus</h2>
+    <div id="timerDisplay">50:00</div>
+    <div id="currentCycle">Cycle: 1 / 4</div>
+    <div id="accumulatedBreakTime">Accumulated Break: 0 min</div>
+
+    <div class="controls">
+        <button id="startStopBtn">Start</button>
+        <button id="skipFocusBtn" class="skip-btn">Skip Focus</button>
+        <button id="skipBreakBtn" class="skip-btn">Skip Break</button>
+    </div>
+
+    <div class="flex-controls">
+        <button id="takeAccumulatedBreakBtn" class="flex-btn" disabled>Take Accumulated Break</button>
+        <button id="returnToFocusBtn" class="flex-btn" style="display: none;">Return to Focus</button>
+    </div>
+
+</div>
+
+<audio id="soundAlert" src="https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3" preload="auto"></audio>
+
+<script>
+    // --- SETTINGS (All times in milliseconds) ---
+    const FOCUS_TIME_MS = 50 * 60 * 1000;
+    const BREAK_TIME_MS = 10 * 60 * 1000;
+    const LONG_BREAK_TIME_MS = 30 * 60 * 1000;
+    const CYCLES_BEFORE_LONG_BREAK = 4;
+    const SOUND_ALERT_URL = 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3'; // Example sound
+
+    // --- DOM Elements ---
+    const timerDisplay = document.getElementById('timerDisplay');
+    const phaseDisplay = document.getElementById('phaseDisplay');
+    const startStopBtn = document.getElementById('startStopBtn');
+    const skipFocusBtn = document.getElementById('skipFocusBtn');
+    const skipBreakBtn = document.getElementById('skipBreakBtn');
+    const currentCycle = document.getElementById('currentCycle');
+    const accumulatedBreakTimeEl = document.getElementById('accumulatedBreakTime');
+    const takeAccumulatedBreakBtn = document.getElementById('takeAccumulatedBreakBtn');
+    const returnToFocusBtn = document.getElementById('returnToFocusBtn');
+    const soundAlert = document.getElementById('soundAlert');
+
+    // --- STATE MANAGEMENT ---
+    let intervalId = null;
+
+    // Default State Structure (Synchronized via localStorage)
+    const defaultState = {
+        isRunning: false,
+        phase: 'focus', // 'focus', 'break', 'long_break', 'accumulated_break'
+        endTime: 0, // Absolute timestamp (ms) when the current phase should end
+        accumulatedBreakMs: 0,
+        currentCycle: 1, // 1 to 4
+        pausedAtMs: 0, // Time remaining in the current phase when paused
+        accumulatedTimeStart: 0, // Absolute timestamp when accumulated break started
+        pendingAccumulatedBreak: 0, // ms of break time that was skipped and is now available
+    };
+
+    let state = { ...defaultState };
+
+    // --- LOCAL STORAGE & SYNC ---
+
+    const STORAGE_KEY = 'pomodoroStateUltraFlex';
+
+    function loadState() {
+        const storedState = localStorage.getItem(STORAGE_KEY);
+        if (storedState) {
+            state = JSON.parse(storedState);
+        } else {
+            saveState();
+        }
+    }
+
+    function saveState() {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    }
+
+    // Listen for state changes from other tabs/devices
+    window.addEventListener('storage', (event) => {
+        if (event.key === STORAGE_KEY) {
+            loadState();
+            render();
+            if (state.isRunning && !intervalId) {
+                startTimer(); // Restart the timer if it's running elsewhere
+            } else if (!state.isRunning && intervalId) {
+                stopTimer(); // Stop the timer if it's paused elsewhere
+            }
+        }
+    });
+
+    // --- UTILITY FUNCTIONS ---
+
+    function formatTime(ms) {
+        const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+        const minutes = Math.floor(totalSeconds / 60);
+        const seconds = totalSeconds % 60;
+        return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+    }
+
+    function playAlert() {
+        soundAlert.currentTime = 0; // Reset sound
+        soundAlert.play().catch(e => console.error("Sound play failed:", e));
+    }
+
+    function calculateTimeRemaining(endTime) {
+        return Math.max(0, endTime - Date.now());
+    }
+
+    // --- MAIN TIMER LOGIC ---
+
+    function updateTimer() {
+        if (!state.isRunning) return;
+
+        let remainingMs;
+
+        if (state.phase === 'accumulated_break') {
+            const timeElapsed = Date.now() - state.accumulatedTimeStart;
+            remainingMs = Math.max(0, state.accumulatedBreakMs - timeElapsed);
+        } else {
+            remainingMs = calculateTimeRemaining(state.endTime);
+        }
+
+
+        if (remainingMs <= 0) {
+            // Phase ended, auto-start next
+            stopTimer(); // Stop the current loop before starting the next phase
+            handlePhaseEnd();
+            return;
+        }
+
+        render(remainingMs);
+    }
+
+    function startTimer() {
+        if (intervalId) return;
+
+        if (!state.isRunning) {
+            // New start or unpause
+            state.isRunning = true;
+
+            const now = Date.now();
+            if (state.pausedAtMs > 0) {
+                // Unpause: Calculate new endTime based on time remaining
+                if (state.phase === 'accumulated_break') {
+                    // When unpausing an accumulated break, we don't change endTime,
+                    // we update the accumulatedTimeStart to account for the pause
+                    state.accumulatedTimeStart = now - (state.accumulatedBreakMs - state.pausedAtMs);
+                } else {
+                    state.endTime = now + state.pausedAtMs;
+                }
+                state.pausedAtMs = 0;
+            } else if (state.endTime === 0) {
+                // First start: Set endTime
+                let duration;
+                if (state.phase === 'focus') duration = FOCUS_TIME_MS;
+                else if (state.phase === 'break') duration = BREAK_TIME_MS;
+                else if (state.phase === 'long_break') duration = LONG_BREAK_TIME_MS;
+
+                state.endTime = now + duration;
+            }
+        }
+
+        intervalId = setInterval(updateTimer, 50); // High frequency for responsiveness
+        saveState();
+        render(); // Initial render
+    }
+
+    function stopTimer() {
+        if (!intervalId) return;
+
+        clearInterval(intervalId);
+        intervalId = null;
+
+        if (state.isRunning) {
+            state.isRunning = false;
+
+            // Calculate pausedAtMs
+            if (state.phase === 'accumulated_break') {
+                const timeElapsed = Date.now() - state.accumulatedTimeStart;
+                state.pausedAtMs = Math.max(0, state.accumulatedBreakMs - timeElapsed);
+            } else {
+                state.pausedAtMs = calculateTimeRemaining(state.endTime);
+            }
+        }
+
+        saveState();
+        render(); // Final render when stopped
+    }
+
+    // --- PHASE TRANSITION LOGIC ---
+
+    function handlePhaseEnd() {
+        playAlert();
+        state.pausedAtMs = 0; // Reset for next phase
+        state.endTime = 0; // Will be set on next start
+
+        let nextPhase;
+        let nextCycle = state.currentCycle;
+
+        if (state.phase === 'focus') {
+            if (state.currentCycle < CYCLES_BEFORE_LONG_BREAK) {
+                nextPhase = 'break';
+            } else {
+                nextPhase = 'long_break';
+            }
+        } else if (state.phase === 'break' || state.phase === 'accumulated_break') {
+            nextPhase = 'focus';
+            nextCycle = state.currentCycle + 1;
+        } else if (state.phase === 'long_break') {
+            nextPhase = 'focus';
+            nextCycle = 1; // Reset cycle count after long break
+        }
+
+        // Apply new cycle count
+        if (nextCycle > CYCLES_BEFORE_LONG_BREAK) nextCycle = 1;
+        state.currentCycle = nextCycle;
+        state.phase = nextPhase;
+        state.accumulatedBreakMs = 0; // Clear accumulated break after it's used or on new cycle
+
+        saveState();
+        startTimer(); // Auto-start next phase
+    }
+
+    function skipPhase() {
+        if (state.phase === 'accumulated_break') {
+             // Skipping the accumulated break means returning the remainder
+             const remaining = calculateAccumulatedBreakRemaining();
+             state.pendingAccumulatedBreak += remaining;
+        } else if (state.phase === 'break') {
+            // Accumulate the skipped break time (10 min)
+            state.pendingAccumulatedBreak += BREAK_TIME_MS;
+        }
+
+        stopTimer();
+        handlePhaseEnd(); // Skip to the *next* logical phase
+    }
+
+    // --- FLEXIBILITY LOGIC (Skip/Return) ---
+
+    function calculateAccumulatedBreakRemaining() {
+        if (state.phase !== 'accumulated_break') return 0;
+        const timeElapsed = Date.now() - state.accumulatedTimeStart;
+        return Math.max(0, state.accumulatedBreakMs - timeElapsed);
+    }
+
+    function takeAccumulatedBreak() {
+        if (state.pendingAccumulatedBreak === 0) return;
+
+        // Save remaining time of current focus
+        if (state.phase === 'focus') {
+            stopTimer(); // This calculates and saves state.pausedAtMs
+            state.accumulatedBreakMs = state.pendingAccumulatedBreak + BREAK_TIME_MS; // Add the break for the current cycle
+            state.pendingAccumulatedBreak = 0; // Reset pending as it's now part of the current accumulated break
+
+            state.phase = 'accumulated_break';
+            state.accumulatedTimeStart = Date.now(); // Start the accumulated break timer
+            state.endTime = 0; // Not used in this phase, rely on accumulatedTimeStart/accumulatedBreakMs
+            
+            saveState();
+            startTimer();
+        }
+    }
+
+    function returnToFocus() {
+        if (state.phase !== 'accumulated_break') return;
+
+        stopTimer(); // Calculates pausedAtMs (remaining break time)
+
+        // The remaining time of the accumulated break is now pending/accumulated for later use
+        state.pendingAccumulatedBreak = state.pausedAtMs;
+        state.accumulatedBreakMs = 0;
+        state.pausedAtMs = state.pausedAtMs > 0 ? state.pausedAtMs : 0; // Restore remaining focus time
+
+        state.phase = 'focus';
+        state.endTime = Date.now() + state.pausedAtMs; // Set new endTime for the rest of the focus
+
+        saveState();
+        // Do NOT auto-start here. User must click Start/Continue to resume the focus.
+        render();
+    }
+
+
+    // --- RENDER & INIT ---
+
+    function render(timeMs = 0) {
+        let displayMs;
+
+        if (state.isRunning) {
+            displayMs = timeMs || (state.phase === 'accumulated_break' ? calculateAccumulatedBreakRemaining() : calculateTimeRemaining(state.endTime));
+            startStopBtn.textContent = 'Pause';
+            startStopBtn.style.backgroundColor = '#e5c07b'; // Yellow for Pause
+        } else {
+            startStopBtn.textContent = 'Start';
+            startStopBtn.style.backgroundColor = '#61afef'; // Blue for Start
+
+            // Calculate the time to display when paused/stopped
+            if (state.pausedAtMs > 0) {
+                displayMs = state.pausedAtMs;
+            } else {
+                if (state.phase === 'focus') displayMs = FOCUS_TIME_MS;
+                else if (state.phase === 'break') displayMs = BREAK_TIME_MS;
+                else if (state.phase === 'long_break') displayMs = LONG_BREAK_TIME_MS;
+                else if (state.phase === 'accumulated_break') displayMs = state.accumulatedBreakMs;
+            }
+        }
+
+        timerDisplay.textContent = formatTime(displayMs);
+
+        // Update Phase Display
+        let phaseText = '';
+        if (state.phase === 'focus') phaseText = 'Focus';
+        else if (state.phase === 'break') phaseText = 'Short Break';
+        else if (state.phase === 'long_break') phaseText = 'Long Break';
+        else if (state.phase === 'accumulated_break') phaseText = 'Accumulated Break';
+        
+        phaseDisplay.textContent = phaseText;
+        timerDisplay.style.color = (state.phase === 'focus') ? '#98c379' : (state.phase.includes('break') ? '#e5c07b' : 'white');
+
+        // Update Cycle Display
+        currentCycle.textContent = `Cycle: ${state.currentCycle} / ${CYCLES_BEFORE_LONG_BREAK}`;
+
+        // Update Accumulated Break Display
+        const accumulatedMin = Math.round(state.pendingAccumulatedBreak / 60000);
+        accumulatedBreakTimeEl.textContent = `Accumulated Break: ${accumulatedMin} min`;
+
+        // Update Control Buttons
+        takeAccumulatedBreakBtn.disabled = state.pendingAccumulatedBreak === 0 || state.phase !== 'focus' || state.isRunning;
+        takeAccumulatedBreakBtn.style.display = state.phase === 'focus' ? 'block' : 'none';
+        returnToFocusBtn.style.display = state.phase === 'accumulated_break' ? 'block' : 'none';
+        skipFocusBtn.style.display = state.phase === 'focus' ? 'block' : 'none';
+        skipBreakBtn.style.display = state.phase.includes('break') && state.phase !== 'long_break' ? 'block' : 'none';
+
+        // Update Title for Notification/Tab (Simplified: Use Tab Title for visibility)
+        document.title = `${formatTime(displayMs)} - ${phaseText}`;
+
+    }
+
+    // --- EVENT LISTENERS ---
+
+    startStopBtn.addEventListener('click', () => {
+        if (state.isRunning) {
+            stopTimer();
+        } else {
+            startTimer();
+        }
+    });
+
+    skipFocusBtn.addEventListener('click', () => {
+        if (state.phase === 'focus') {
+            skipPhase();
+        }
+    });
+
+    skipBreakBtn.addEventListener('click', () => {
+        if (state.phase === 'break') {
+            skipPhase();
+        }
+    });
+
+    takeAccumulatedBreakBtn.addEventListener('click', takeAccumulatedBreak);
+    returnToFocusBtn.addEventListener('click', returnToFocus);
+
+
+    // --- INITIALIZATION ---
+    loadState();
+    render();
+
+    // If the state was running when loaded, re-start the timer loop
+    if (state.isRunning) {
+        startTimer();
+    } else {
+        // Ensure the correct time is displayed when stopped
+        render();
+    }
+
+    // --- NOTIFICATIONS (Simplified - Not the primary focus due to previous issues) ---
+    // Note: The notification API is finicky and dependent on the browser context (e.g., HTTPS, user interaction).
+    if ('Notification' in window) {
+        if (Notification.permission !== 'granted' && Notification.permission !== 'denied') {
+            Notification.requestPermission();
+        }
+    }
+
+</script>
+</body>
+</html>
