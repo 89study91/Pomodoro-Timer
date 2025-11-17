@@ -215,7 +215,20 @@
             document.getElementById('timer').textContent = 'ERR';
             throw new Error("Initialization Failed"); // Detiene el script
         }
-        
+// Referencia al tiempo del servidor de Firebase
+const serverTimeRef = db.ref('.info/serverTimeOffset');
+let serverTimeOffset = 0;
+
+serverTimeRef.on('value', (snap) => {
+    serverTimeOffset = snap.val() || 0;
+});
+
+/**
+ * Obtiene el tiempo actual, corrigiendo la diferencia con el servidor de Firebase.
+ */
+function getServerTime() {
+    return Date.now() + serverTimeOffset;
+}  
         // Referencia a la base de datos
         const dbRef = db.ref('pomodoroState');
         const dbSettingsRef = db.ref('pomodoroSettings');
@@ -298,12 +311,11 @@
             // Si está pausado, simplemente usamos el tiempo de pausa guardado
             if (serverState.isPaused) {
                 localState.remainingTime = serverState.remainingTimeAtPause;
-            } else {
-                // Si está corriendo, calculamos el tiempo restante con el timestamp
-                const elapsedSeconds = (Date.now() - serverState.startTime) / 1000;
-                localState.remainingTime = Math.max(0, serverState.totalTimeForPhase - elapsedSeconds);
-            }
-
+} else {
+    // Si está corriendo, calculamos el tiempo restante usando el tiempo del SERVIDOR
+    const elapsedSeconds = (getServerTime() - serverState.startTime) / 1000;
+    localState.remainingTime = Math.max(0, serverState.totalTimeForPhase - elapsedSeconds);
+}
             updateUI();
             
             // Sincronizar el temporizador local
@@ -421,14 +433,14 @@
          */
         startPauseBtn.onclick = () => {
             if (localState.isPaused) {
-                // START
-                const totalTimeForPhase = getTotalTimeForCurrentPhase();
-                updateServerState({
-                    isPaused: false,
-                    startTime: Date.now(),
-                    totalTimeForPhase: totalTimeForPhase,
-                    remainingTimeAtPause: localState.remainingTime // Esto no se usa en Start, pero es bueno mantenerlo actualizado
-                });
+// START
+const totalTimeForPhase = getTotalTimeForCurrentPhase();
+updateServerState({
+    isPaused: false,
+    startTime: firebase.database.ServerValue.TIMESTAMP, // ¡CRUCIAL PARA LA SINCRONIZACIÓN!
+    totalTimeForPhase: totalTimeForPhase,
+    remainingTimeAtPause: localState.remainingTime 
+});
             } else {
                 // PAUSE
                 updateServerState({
