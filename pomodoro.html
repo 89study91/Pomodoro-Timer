@@ -433,15 +433,33 @@ function getServerTime() {
          */
         startPauseBtn.onclick = () => {
             if (localState.isPaused) {
-// START
-const totalTimeForPhase = getTotalTimeForCurrentPhase();
-updateServerState({
-    isPaused: false,
-    startTime: firebase.database.ServerValue.TIMESTAMP, // ¡CRUCIAL PARA LA SINCRONIZACIÓN!
-    totalTimeForPhase: totalTimeForPhase,
-    remainingTimeAtPause: localState.remainingTime 
-});
-            } else {
+// START/RESUME
+        const totalTimeForPhase = getTotalTimeForCurrentPhase();
+        
+        // 1. Calcular el tiempo que ya transcurrió antes de la pausa (en milisegundos).
+        // (Tiempo Total - Tiempo Restante) * 1000
+        // localState.remainingTime es el tiempo restante al pausar (en segundos).
+        const timeElapsedMs = (totalTimeForPhase - localState.remainingTime) * 1000;
+
+        // 2. Registrar el 'startTime' ajustado.
+        // El nuevo startTime es la hora actual del servidor MENOS el tiempo transcurrido,
+        // para que la reanudación parezca que el timer nunca se detuvo.
+        
+        updateServerState({
+            isPaused: false,
+            // Esto se resuelve como: (Hora Actual del Servidor) - (Tiempo ya Transcurrido)
+            startTime: firebase.database.ServerValue.TIMESTAMP - timeElapsedMs,
+            totalTimeForPhase: totalTimeForPhase,
+            remainingTimeAtPause: 0 // Resetear, ya que no estamos pausados
+        });
+    } else {
+        // PAUSE
+        updateServerState({
+            isPaused: true,
+            remainingTimeAtPause: localState.remainingTime // Esto guarda el tiempo restante
+        });
+    }
+}
                 // PAUSE
                 updateServerState({
                     isPaused: true,
