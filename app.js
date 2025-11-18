@@ -146,55 +146,53 @@ function setupFirebaseListeners() {
     const data = snapshot.val();
     if (!data) return;
     
-    // CRITICAL: If this is our own update (we're the author), don't process it
-    // We only process updates from other devices or when we're not authoritative
-    if (data.authorDevice === deviceId && isAuthoritativeDevice) {
-      // This is our own update, ignore it to prevent feedback loops
-      return;
-    }
+    // CRITICAL FIX: ALL devices must be passive listeners, including the one that initiated the change
+    // This ensures the initiating device also updates from Firebase confirmation
     
     // If we were authoritative but received an update from another device,
     // we're no longer authoritative (another device took control)
-    if (isAuthoritativeDevice && data.authorDevice !== deviceId) {
+    if (isAuthoritativeDevice && data.authorDevice && data.authorDevice !== deviceId) {
       isAuthoritativeDevice = false;
     }
     
     const wasRunning = state.isRunning;
     const now = Date.now();
     
-    // Calculate remaining time based on server time to prevent clock drift
+    // Calculate server time offset for clock drift correction
     const serverTime = data.serverTime || now;
-    const timeDiff = now - serverTime;
+    const timeDiff = now - serverTime; // Positive if local clock is ahead
     
     if (data.isRunning && data.startTime && data.remainingTimeAtStart !== null) {
       // CRITICAL FIX: Calculate elapsed time using server timestamp
       // Firebase ServerValue.TIMESTAMP is resolved by the server to a number
-      // Handle both ServerValue placeholder object and resolved timestamp number
       let startTimeMs = data.startTime;
       if (typeof startTimeMs === 'object' && startTimeMs !== null) {
-        // ServerValue.TIMESTAMP placeholder - estimate server time
-        // This happens if we read before server resolves it (rare)
-        startTimeMs = now - timeDiff;
+        // ServerValue.TIMESTAMP placeholder - wait for it to resolve
+        // Don't process until server resolves it
+        return;
       } else if (typeof startTimeMs !== 'number') {
         // Invalid timestamp, skip this update
         return;
       }
       
-      // Calculate elapsed time accounting for clock drift
-      // elapsed = (current local time - start server time - clock offset)
-      const elapsed = Math.floor((now - startTimeMs - timeDiff) / 1000);
+      // CRITICAL FIX: Calculate elapsed time correctly
+      // startTimeMs is server timestamp (from ServerValue.TIMESTAMP) when timer started
+      // Both startTimeMs and current time are in the same reference (server time)
+      // We calculate elapsed directly: elapsed = (current time - start time)
+      // Since startTimeMs is server time, we use local time but account for any drift
+      // The simplest approach: elapsed = (now - startTimeMs) / 1000
+      // This works because both are timestamps in milliseconds
+      const elapsed = Math.floor((now - startTimeMs) / 1000);
       const calculatedRemaining = Math.max(0, data.remainingTimeAtStart - elapsed);
       
-      // Update state from authoritative source (Firebase) - PASSIVE LISTENER
-      // Only update if this is a significant change or we're not running locally
-      if (!wasRunning || Math.abs(calculatedRemaining - state.remainingTime) > 1) {
-        state.remainingTime = calculatedRemaining;
-        state.initialRemainingTime = data.remainingTimeAtStart;
-        state.startTime = startTimeMs;
-        state.isRunning = true;
-      }
+      // Update state from authoritative source (Firebase) - ALL devices are passive listeners
+      state.remainingTime = calculatedRemaining;
+      state.initialRemainingTime = data.remainingTimeAtStart;
+      state.startTime = startTimeMs;
+      state.isRunning = true;
     } else if (!data.isRunning) {
-      // If remote is paused, use the stored remaining time
+      // If remote is paused, use the stored remaining time (elapsed time was already subtracted)
+      // remainingTime in Firebase is the paused time (after subtracting elapsed)
       setRemainingTime(data.remainingTime || state.remainingTime);
       state.isRunning = false;
       state.startTime = null;
@@ -214,18 +212,20 @@ function setupFirebaseListeners() {
     
     // Update timer intervals based on running state
     if (state.isRunning && !wasRunning) {
-      // Timer was started remotely - start local countdown
+      // Timer was started (by us or remotely) - start local countdown for UI
       if (!timerInterval) {
         timerInterval = setInterval(updateTimer, TIMER_TICK);
       }
     } else if (!state.isRunning && wasRunning) {
-      // Timer was paused remotely - stop local countdown
+      // Timer was paused (by us or remotely) - stop local countdown
       if (timerInterval) {
         clearInterval(timerInterval);
         timerInterval = null;
       }
     }
     
+    // CRITICAL: Always update UI from Firebase state
+    // This ensures the initiating device also updates when it receives its own write confirmation
     updateUI();
     
     // Check if timer reached zero
@@ -287,10 +287,11 @@ function startTimer() {
   // Mark this device as authoritative (the one that initiated Start)
   isAuthoritativeDevice = true;
   
-  // CRITICAL: When resuming from pause, use the CURRENT remainingTime (paused time)
+  // CRITICAL FIX: When resuming from pause, use the CURRENT remainingTime (paused time)
   // as the initialRemainingTime. This ensures we resume from where we paused, not from full duration.
   state.initialRemainingTime = state.remainingTime;
   state.isRunning = true;
+  // startTime will be set by Firebase ServerValue.TIMESTAMP when we write
   
   // Clear any existing intervals
   if (timerInterval) clearInterval(timerInterval);
@@ -299,19 +300,26 @@ function startTimer() {
   // ONLY the authoritative device writes to Firebase
   writeStateToFirebase();
   
-  updateUI();
-  
-  // Start local timer countdown (only for UI updates)
-  timerInterval = setInterval(updateTimer, TIMER_TICK);
+  // Don't update UI here - wait for Firebase listener to confirm and update
+  // This ensures all devices (including this one) get the correct server timestamp
 }
 
 function pauseTimer() {
   // Mark this device as authoritative (the one that initiated Pause)
   isAuthoritativeDevice = true;
   
+  // CRITICAL FIX: Calculate elapsed time and store the remaining time
+  // When pausing, we need to calculate how much time has elapsed since start
+  // and store the remaining time (not reset to initial)
+  if (state.isRunning && state.startTime && state.initialRemainingTime !== null) {
+    const now = Date.now();
+    const elapsed = Math.floor((now - state.startTime) / 1000);
+    state.remainingTime = Math.max(0, state.initialRemainingTime - elapsed);
+  }
+  
   state.isRunning = false;
   state.startTime = null;
-  state.initialRemainingTime = state.remainingTime; // Update initial to current when pausing
+  // Keep initialRemainingTime for potential resume
   
   if (timerInterval) {
     clearInterval(timerInterval);
@@ -319,6 +327,7 @@ function pauseTimer() {
   }
   
   // Write to Firebase - ONLY the authoritative device writes
+  // Write the calculated remainingTime (after subtracting elapsed)
   writeStateToFirebase();
   
   updateUI();
@@ -327,12 +336,17 @@ function pauseTimer() {
 function updateTimer() {
   if (!state.isRunning || !state.startTime) return;
   
-  // Calculate elapsed time since start
+  // CRITICAL: Local timer is only for UI updates
+  // The authoritative time comes from Firebase listener calculations
+  // This local calculation is just for smooth UI updates between Firebase syncs
   const now = Date.now();
   const elapsed = Math.floor((now - state.startTime) / 1000);
+  const calculatedRemaining = Math.max(0, state.initialRemainingTime - elapsed);
   
-  // Update remaining time based on initial time minus elapsed
-  state.remainingTime = Math.max(0, state.initialRemainingTime - elapsed);
+  // Only update if it's a reasonable value (Firebase listener will correct if needed)
+  if (calculatedRemaining >= 0 && calculatedRemaining <= state.initialRemainingTime) {
+    state.remainingTime = calculatedRemaining;
+  }
   
   // Check if timer reached zero
   if (state.remainingTime <= 0) {
