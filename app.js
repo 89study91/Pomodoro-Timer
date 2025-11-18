@@ -9,16 +9,36 @@ const firebaseConfig = {
   appId: "1:523175871116:web:5c43cb66e4e01db215b1a9"
 };
 
-// Initialize Firebase
-firebase.initializeApp(firebaseConfig);
-const database = firebase.database();
+// Initialize Firebase (will be called after DOM loads)
+let database;
+function initializeFirebase() {
+  try {
+    if (typeof firebase === 'undefined') {
+      console.warn('Firebase SDK not loaded');
+      return;
+    }
+    
+    // Check if already initialized
+    try {
+      firebase.app();
+      database = firebase.database();
+    } catch (e) {
+      // Not initialized, so initialize it
+      firebase.initializeApp(firebaseConfig);
+      database = firebase.database();
+    }
+  } catch (error) {
+    console.error('Firebase initialization error:', error);
+  }
+}
 
 // Application State
 let state = {
   phase: 'focus', // 'focus' or 'break'
   isRunning: false,
   startTime: null,
-  remainingTime: 50 * 60, // in seconds
+  initialRemainingTime: 50 * 60, // Time remaining when timer started (in seconds)
+  remainingTime: 50 * 60, // Current remaining time (in seconds)
   cycleCount: 1,
   accumulatedBreakTime: 0, // in seconds
   settings: {
@@ -36,30 +56,41 @@ let state = {
 let timerInterval = null;
 let syncInterval = null;
 const SYNC_INTERVAL = 1000; // Sync every second
+const TIMER_TICK = 100; // Update timer every 100ms for smooth display
 
-// DOM Elements
-const timerEl = document.getElementById('timer');
-const phaseLabelEl = document.getElementById('phase-label');
-const cycleCountEl = document.getElementById('cycle-count');
-const startPauseBtn = document.getElementById('start-pause-btn');
-const skipBreakBtn = document.getElementById('skip-break-btn');
-const takeBreakBtn = document.getElementById('take-break-btn');
-const resumeFocusBtn = document.getElementById('resume-focus-btn');
-const resetBtn = document.getElementById('reset-btn');
-const settingsBtn = document.getElementById('settings-btn');
-const settingsPanel = document.getElementById('settings-panel');
-const saveSettingsBtn = document.getElementById('save-settings-btn');
-const closeSettingsBtn = document.getElementById('close-settings-btn');
-const accumulatedTimeEl = document.getElementById('accumulated-time');
+// DOM Elements (will be initialized after DOM loads)
+let timerEl, phaseLabelEl, cycleCountEl, startPauseBtn, skipBreakBtn, takeBreakBtn;
+let resumeFocusBtn, resetBtn, settingsBtn, settingsPanel, saveSettingsBtn;
+let closeSettingsBtn, accumulatedTimeEl, focusTimeInput, breakTimeInput;
+let longBreakTimeInput, longBreakIntervalInput;
 
-// Settings inputs
-const focusTimeInput = document.getElementById('focus-time');
-const breakTimeInput = document.getElementById('break-time');
-const longBreakTimeInput = document.getElementById('long-break-time');
-const longBreakIntervalInput = document.getElementById('long-break-interval');
+// Wait for DOM to be ready
+document.addEventListener('DOMContentLoaded', function() {
+  // Initialize Firebase first
+  initializeFirebase();
+  
+  // Initialize DOM Elements
+  timerEl = document.getElementById('timer');
+  phaseLabelEl = document.getElementById('phase-label');
+  cycleCountEl = document.getElementById('cycle-count');
+  startPauseBtn = document.getElementById('start-pause-btn');
+  skipBreakBtn = document.getElementById('skip-break-btn');
+  takeBreakBtn = document.getElementById('take-break-btn');
+  resumeFocusBtn = document.getElementById('resume-focus-btn');
+  resetBtn = document.getElementById('reset-btn');
+  settingsBtn = document.getElementById('settings-btn');
+  settingsPanel = document.getElementById('settings-panel');
+  saveSettingsBtn = document.getElementById('save-settings-btn');
+  closeSettingsBtn = document.getElementById('close-settings-btn');
+  accumulatedTimeEl = document.getElementById('accumulated-time');
+  focusTimeInput = document.getElementById('focus-time');
+  breakTimeInput = document.getElementById('break-time');
+  longBreakTimeInput = document.getElementById('long-break-time');
+  longBreakIntervalInput = document.getElementById('long-break-interval');
 
-// Initialize
-init();
+  // Initialize app
+  init();
+});
 
 function init() {
   // Request notification permission
@@ -95,35 +126,79 @@ function saveSettings() {
   localStorage.setItem('pomodoroSettings', JSON.stringify(state.settings));
 }
 
+// Helper function to set remaining time (updates both remainingTime and initialRemainingTime)
+function setRemainingTime(seconds) {
+  state.remainingTime = seconds;
+  state.initialRemainingTime = seconds;
+}
+
 function setupFirebaseListeners() {
+  if (!database) {
+    console.warn('Firebase database not available, running in local-only mode');
+    return;
+  }
+  
   const timerRef = database.ref('timer');
   
   timerRef.on('value', (snapshot) => {
     const data = snapshot.val();
     if (data) {
+      // Only sync if data is from another device (not our own update)
+      const wasRunning = state.isRunning;
+      
       // Calculate remaining time based on server time to prevent clock drift
       const serverTime = data.serverTime || Date.now();
       const now = Date.now();
       const timeDiff = now - serverTime;
       
-      if (data.isRunning && data.startTime) {
+      if (data.isRunning && data.startTime && data.remainingTimeAtStart !== null) {
         // Calculate elapsed time accounting for server time offset
         const elapsed = Math.floor((now - data.startTime - timeDiff) / 1000);
-        state.remainingTime = Math.max(0, data.remainingTimeAtStart - elapsed);
-      } else {
-        state.remainingTime = data.remainingTime || state.remainingTime;
+        const calculatedRemaining = Math.max(0, data.remainingTimeAtStart - elapsed);
+        
+        // Only update if the remote state is more recent or if we're not running locally
+        if (!wasRunning || Math.abs(calculatedRemaining - state.remainingTime) > 2) {
+          state.remainingTime = calculatedRemaining;
+          state.initialRemainingTime = data.remainingTimeAtStart;
+          state.startTime = data.startTime;
+        }
+      } else if (!data.isRunning) {
+        // If remote is paused, use the stored remaining time
+        setRemainingTime(data.remainingTime || state.remainingTime);
       }
       
-      state.phase = data.phase || state.phase;
-      state.isRunning = data.isRunning || false;
-      state.cycleCount = data.cycleCount || state.cycleCount;
-      state.accumulatedBreakTime = data.accumulatedBreakTime || 0;
-      state.isInAccumulatedBreak = data.isInAccumulatedBreak || false;
-      state.accumulatedBreakRemaining = data.accumulatedBreakRemaining || 0;
-      state.savedFocusTime = data.savedFocusTime || null;
+      // Sync other state properties
+      state.phase = data.phase !== undefined ? data.phase : state.phase;
+      state.isRunning = data.isRunning !== undefined ? data.isRunning : state.isRunning;
+      state.cycleCount = data.cycleCount !== undefined ? data.cycleCount : state.cycleCount;
+      state.accumulatedBreakTime = data.accumulatedBreakTime !== undefined ? data.accumulatedBreakTime : state.accumulatedBreakTime;
+      state.isInAccumulatedBreak = data.isInAccumulatedBreak !== undefined ? data.isInAccumulatedBreak : state.isInAccumulatedBreak;
+      state.accumulatedBreakRemaining = data.accumulatedBreakRemaining !== undefined ? data.accumulatedBreakRemaining : state.accumulatedBreakRemaining;
+      state.savedFocusTime = data.savedFocusTime !== undefined ? data.savedFocusTime : state.savedFocusTime;
       
       if (data.settings) {
         state.settings = { ...state.settings, ...data.settings };
+      }
+      
+      // Update timer intervals based on running state
+      if (state.isRunning && !wasRunning) {
+        // Timer was started remotely
+        if (!timerInterval) {
+          timerInterval = setInterval(updateTimer, TIMER_TICK);
+        }
+        if (!syncInterval) {
+          syncInterval = setInterval(syncToFirebase, SYNC_INTERVAL);
+        }
+      } else if (!state.isRunning && wasRunning) {
+        // Timer was paused remotely
+        if (timerInterval) {
+          clearInterval(timerInterval);
+          timerInterval = null;
+        }
+        if (syncInterval) {
+          clearInterval(syncInterval);
+          syncInterval = null;
+        }
       }
       
       updateUI();
@@ -164,9 +239,9 @@ function saveSettingsHandler() {
   // If timer is not running, update the display
   if (!state.isRunning) {
     if (state.phase === 'focus') {
-      state.remainingTime = state.settings.focusTime * 60;
+      setRemainingTime(state.settings.focusTime * 60);
     } else {
-      state.remainingTime = getBreakTime() * 60;
+      setRemainingTime(getBreakTime() * 60);
     }
     updateUI();
   }
@@ -181,22 +256,30 @@ function toggleTimer() {
 }
 
 function startTimer() {
+  if (state.isRunning) return;
+  
   state.isRunning = true;
   state.startTime = Date.now();
+  state.initialRemainingTime = state.remainingTime; // Store current remaining time as initial
   
   syncToFirebase();
   updateUI();
   
+  // Clear any existing intervals
   if (timerInterval) clearInterval(timerInterval);
-  timerInterval = setInterval(updateTimer, 100);
-  
   if (syncInterval) clearInterval(syncInterval);
+  
+  // Start local timer countdown
+  timerInterval = setInterval(updateTimer, TIMER_TICK);
+  
+  // Sync to Firebase periodically
   syncInterval = setInterval(syncToFirebase, SYNC_INTERVAL);
 }
 
 function pauseTimer() {
   state.isRunning = false;
   state.startTime = null;
+  state.initialRemainingTime = state.remainingTime; // Update initial to current when pausing
   
   if (timerInterval) {
     clearInterval(timerInterval);
@@ -213,11 +296,21 @@ function pauseTimer() {
 }
 
 function updateTimer() {
-  if (!state.isRunning) return;
+  if (!state.isRunning || !state.startTime) return;
   
-  // Timer updates are primarily handled by Firebase sync
-  // This local update is just for immediate UI feedback
-  updateUI();
+  // Calculate elapsed time since start
+  const now = Date.now();
+  const elapsed = Math.floor((now - state.startTime) / 1000);
+  
+  // Update remaining time based on initial time minus elapsed
+  state.remainingTime = Math.max(0, state.initialRemainingTime - elapsed);
+  
+  // Check if timer reached zero
+  if (state.remainingTime <= 0) {
+    handlePhaseComplete();
+  } else {
+    updateUI();
+  }
 }
 
 function handlePhaseComplete() {
@@ -237,7 +330,7 @@ function handlePhaseComplete() {
     state.cycleCount++;
     
     state.phase = 'break';
-    state.remainingTime = breakTime * 60;
+    setRemainingTime(breakTime * 60);
     state.isInAccumulatedBreak = false;
     
     // Auto-start break
@@ -252,7 +345,7 @@ function handlePhaseComplete() {
       showNotification('Accumulated Break Complete!', 'Resuming focus.');
       
       state.phase = 'focus';
-      state.remainingTime = state.savedFocusTime || state.settings.focusTime * 60;
+      setRemainingTime(state.savedFocusTime || state.settings.focusTime * 60);
       state.isInAccumulatedBreak = false;
       state.accumulatedBreakTime = 0; // All accumulated time was used
       state.savedFocusTime = null;
@@ -262,7 +355,7 @@ function handlePhaseComplete() {
       showNotification('Break Complete!', 'Time to focus.');
       
       state.phase = 'focus';
-      state.remainingTime = state.settings.focusTime * 60;
+      setRemainingTime(state.settings.focusTime * 60);
       
       // Reset cycle count after long break (when cycleCount is a multiple of interval)
       if (state.cycleCount % state.settings.longBreakInterval === 0) {
@@ -295,7 +388,7 @@ function skipBreak() {
   
   // Move to next focus (cycleCount already incremented when entering break)
   state.phase = 'focus';
-  state.remainingTime = state.settings.focusTime * 60;
+  setRemainingTime(state.settings.focusTime * 60);
   
   syncToFirebase();
   updateUI();
@@ -318,7 +411,7 @@ function takeAccumulatedBreak() {
   state.isInAccumulatedBreak = true;
   state.accumulatedBreakRemaining = state.accumulatedBreakTime;
   state.phase = 'break';
-  state.remainingTime = state.accumulatedBreakTime;
+  setRemainingTime(state.accumulatedBreakTime);
   
   syncToFirebase();
   updateUI();
@@ -341,7 +434,7 @@ function resumeFocus() {
   // Resume focus with saved time
   state.isInAccumulatedBreak = false;
   state.phase = 'focus';
-  state.remainingTime = state.savedFocusTime || state.settings.focusTime * 60;
+  setRemainingTime(state.savedFocusTime || state.settings.focusTime * 60);
   state.savedFocusTime = null;
   
   syncToFirebase();
@@ -357,7 +450,7 @@ function resetTimer() {
   pauseTimer();
   
   state.phase = 'focus';
-  state.remainingTime = state.settings.focusTime * 60;
+  setRemainingTime(state.settings.focusTime * 60);
   state.cycleCount = 1;
   state.accumulatedBreakTime = 0;
   state.isInAccumulatedBreak = false;
@@ -376,24 +469,39 @@ function getBreakTime() {
 }
 
 function syncToFirebase() {
-  const timerRef = database.ref('timer');
+  if (!database) return;
   
-  const data = {
-    phase: state.phase,
-    isRunning: state.isRunning,
-    remainingTime: state.remainingTime,
-    remainingTimeAtStart: state.isRunning ? state.remainingTime : null,
-    startTime: state.isRunning ? Date.now() : null,
-    cycleCount: state.cycleCount,
-    accumulatedBreakTime: state.accumulatedBreakTime,
-    isInAccumulatedBreak: state.isInAccumulatedBreak,
-    accumulatedBreakRemaining: state.accumulatedBreakRemaining,
-    savedFocusTime: state.savedFocusTime,
-    settings: state.settings,
-    serverTime: Date.now()
-  };
-  
-  timerRef.set(data);
+  try {
+    const timerRef = database.ref('timer');
+    
+    // Calculate remaining time at start for accurate sync
+    let remainingTimeAtStart = state.remainingTime;
+    if (state.isRunning && state.startTime) {
+      const elapsed = Math.floor((Date.now() - state.startTime) / 1000);
+      remainingTimeAtStart = state.remainingTime + elapsed;
+    }
+    
+    const data = {
+      phase: state.phase,
+      isRunning: state.isRunning,
+      remainingTime: state.remainingTime,
+      remainingTimeAtStart: state.isRunning ? remainingTimeAtStart : state.remainingTime,
+      startTime: state.isRunning ? (state.startTime || Date.now()) : null,
+      cycleCount: state.cycleCount,
+      accumulatedBreakTime: state.accumulatedBreakTime,
+      isInAccumulatedBreak: state.isInAccumulatedBreak,
+      accumulatedBreakRemaining: state.accumulatedBreakRemaining,
+      savedFocusTime: state.savedFocusTime,
+      settings: state.settings,
+      serverTime: Date.now()
+    };
+    
+    timerRef.set(data).catch(error => {
+      console.error('Firebase sync error:', error);
+    });
+  } catch (error) {
+    console.error('Firebase sync error:', error);
+  }
 }
 
 function updateUI() {
