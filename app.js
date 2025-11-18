@@ -57,6 +57,7 @@ let timerInterval = null;
 let syncInterval = null;
 const SYNC_INTERVAL = 1000; // Sync every second
 const TIMER_TICK = 100; // Update timer every 100ms for smooth display
+let lastSyncTime = 0; // Track last sync time to prevent feedback loops
 
 // DOM Elements (will be initialized after DOM loads)
 let timerEl, phaseLabelEl, cycleCountEl, startPauseBtn, skipBreakBtn, takeBreakBtn;
@@ -142,30 +143,42 @@ function setupFirebaseListeners() {
   
   timerRef.on('value', (snapshot) => {
     const data = snapshot.val();
-    if (data) {
-      // Only sync if data is from another device (not our own update)
-      const wasRunning = state.isRunning;
+    if (!data) return;
+    
+    // Prevent processing our own immediate updates (within 100ms)
+    const now = Date.now();
+    if (now - lastSyncTime < 100) {
+      return; // Likely our own update, ignore it
+    }
+    
+    const wasRunning = state.isRunning;
+    
+    // Calculate remaining time based on server time to prevent clock drift
+    const serverTime = data.serverTime || now;
+    const timeDiff = now - serverTime;
+    
+    if (data.isRunning && data.startTime && data.remainingTimeAtStart !== null) {
+      // CRITICAL FIX: Calculate elapsed time using server time offset
+      // remainingTimeAtStart is the time when the timer started/resumed
+      // We calculate elapsed = (current time - start time), accounting for clock drift
+      const elapsed = Math.floor((now - data.startTime - timeDiff) / 1000);
+      const calculatedRemaining = Math.max(0, data.remainingTimeAtStart - elapsed);
       
-      // Calculate remaining time based on server time to prevent clock drift
-      const serverTime = data.serverTime || Date.now();
-      const now = Date.now();
-      const timeDiff = now - serverTime;
-      
-      if (data.isRunning && data.startTime && data.remainingTimeAtStart !== null) {
-        // Calculate elapsed time accounting for server time offset
-        const elapsed = Math.floor((now - data.startTime - timeDiff) / 1000);
-        const calculatedRemaining = Math.max(0, data.remainingTimeAtStart - elapsed);
-        
-        // Only update if the remote state is more recent or if we're not running locally
-        if (!wasRunning || Math.abs(calculatedRemaining - state.remainingTime) > 2) {
-          state.remainingTime = calculatedRemaining;
-          state.initialRemainingTime = data.remainingTimeAtStart;
-          state.startTime = data.startTime;
-        }
-      } else if (!data.isRunning) {
-        // If remote is paused, use the stored remaining time
+      // Update if we're not running locally, or if the remote state differs significantly
+      // This prevents overwriting our own updates with stale remote data
+      if (!wasRunning || Math.abs(calculatedRemaining - state.remainingTime) > 2) {
+        state.remainingTime = calculatedRemaining;
+        state.initialRemainingTime = data.remainingTimeAtStart; // Use the remote initial time
+        state.startTime = data.startTime; // Use the remote start time
+      }
+    } else if (!data.isRunning) {
+      // If remote is paused, use the stored remaining time
+      // This is the paused time, which should be synced across devices
+      // Only update if we're also paused or if the difference is significant
+      if (!wasRunning || Math.abs((data.remainingTime || state.remainingTime) - state.remainingTime) > 2) {
         setRemainingTime(data.remainingTime || state.remainingTime);
       }
+    }
       
       // Sync other state properties
       state.phase = data.phase !== undefined ? data.phase : state.phase;
@@ -258,10 +271,13 @@ function toggleTimer() {
 function startTimer() {
   if (state.isRunning) return;
   
+  // CRITICAL: When resuming from pause, use the CURRENT remainingTime (paused time)
+  // as the initialRemainingTime. This ensures we resume from where we paused, not from full duration.
+  state.initialRemainingTime = state.remainingTime;
   state.isRunning = true;
   state.startTime = Date.now();
-  state.initialRemainingTime = state.remainingTime; // Store current remaining time as initial
   
+  // Sync immediately to Firebase with correct values
   syncToFirebase();
   updateUI();
   
@@ -474,27 +490,36 @@ function syncToFirebase() {
   try {
     const timerRef = database.ref('timer');
     
-    // Calculate remaining time at start for accurate sync
-    let remainingTimeAtStart = state.remainingTime;
-    if (state.isRunning && state.startTime) {
-      const elapsed = Math.floor((Date.now() - state.startTime) / 1000);
-      remainingTimeAtStart = state.remainingTime + elapsed;
+    // CRITICAL FIX: When running, remainingTimeAtStart should be the initialRemainingTime
+    // (the time when we started/resumed), NOT the current remainingTime + elapsed.
+    // This ensures remote devices can calculate the correct remaining time.
+    let remainingTimeAtStart;
+    if (state.isRunning) {
+      // Use initialRemainingTime (the time when timer started/resumed from pause)
+      // This is the paused time that we resumed from
+      remainingTimeAtStart = state.initialRemainingTime;
+    } else {
+      // When paused, remainingTimeAtStart equals current remainingTime
+      remainingTimeAtStart = state.remainingTime;
     }
     
     const data = {
       phase: state.phase,
       isRunning: state.isRunning,
-      remainingTime: state.remainingTime,
-      remainingTimeAtStart: state.isRunning ? remainingTimeAtStart : state.remainingTime,
-      startTime: state.isRunning ? (state.startTime || Date.now()) : null,
+      remainingTime: state.remainingTime, // Current remaining time (for paused state)
+      remainingTimeAtStart: remainingTimeAtStart, // Time at start/resume (for running state)
+      startTime: state.isRunning ? state.startTime : null,
       cycleCount: state.cycleCount,
       accumulatedBreakTime: state.accumulatedBreakTime,
       isInAccumulatedBreak: state.isInAccumulatedBreak,
       accumulatedBreakRemaining: state.accumulatedBreakRemaining,
       savedFocusTime: state.savedFocusTime,
       settings: state.settings,
-      serverTime: Date.now()
+      serverTime: Date.now() // Current local time (will be used to calculate offset)
     };
+    
+    // Track when we sync to prevent feedback loops
+    lastSyncTime = Date.now();
     
     timerRef.set(data).catch(error => {
       console.error('Firebase sync error:', error);
