@@ -131,14 +131,24 @@ function saveSettings() {
 
 // Helper function to set phase duration and reset elapsed time
 function setPhaseDuration(seconds) {
-  state.phaseDuration = seconds;
+  const duration = Number(seconds) || 0;
+  state.phaseDuration = duration;
   state.totalElapsedTime = 0;
-  state.remainingTime = seconds;
+  state.remainingTime = duration;
 }
 
 // Helper function to update remaining time from phase duration and elapsed time
 function updateRemainingTime() {
-  state.remainingTime = Math.max(0, state.phaseDuration - state.totalElapsedTime);
+  const phaseDuration = Number(state.phaseDuration) || 0;
+  const totalElapsed = Number(state.totalElapsedTime) || 0;
+  state.remainingTime = Math.max(0, phaseDuration - totalElapsed);
+}
+
+// Helper function to safely calculate remaining time
+function calculateRemainingTime(phaseDuration, totalElapsedTime, currentElapsed) {
+  const duration = Number(phaseDuration) || 0;
+  const totalElapsed = (Number(totalElapsedTime) || 0) + (Number(currentElapsed) || 0);
+  return Math.max(0, duration - totalElapsed);
 }
 
 function setupFirebaseListeners() {
@@ -170,41 +180,53 @@ function setupFirebaseListeners() {
     const timeDiff = now - serverTime; // Positive if local clock is ahead
     
     // CRITICAL FIX: Use phaseDuration and totalElapsedTime for accurate calculation
-    // Update phaseDuration and totalElapsedTime from Firebase
-    if (data.phaseDuration !== undefined) {
-      state.phaseDuration = data.phaseDuration;
+    // Update phaseDuration and totalElapsedTime from Firebase with NaN protection
+    if (data.phaseDuration !== undefined && !isNaN(data.phaseDuration)) {
+      state.phaseDuration = Number(data.phaseDuration);
     }
-    if (data.totalElapsedTime !== undefined) {
-      state.totalElapsedTime = data.totalElapsedTime;
+    if (data.totalElapsedTime !== undefined && !isNaN(data.totalElapsedTime)) {
+      state.totalElapsedTime = Number(data.totalElapsedTime);
     }
     
-    if (data.isRunning && data.startTime && data.phaseDuration !== undefined) {
+    // Ensure phaseDuration and totalElapsedTime are valid numbers
+    if (isNaN(state.phaseDuration) || state.phaseDuration <= 0) {
+      // Default to focus time if invalid
+      state.phaseDuration = state.settings.focusTime * 60;
+    }
+    if (isNaN(state.totalElapsedTime) || state.totalElapsedTime < 0) {
+      state.totalElapsedTime = 0;
+    }
+    
+    if (data.isRunning && data.startTime) {
       // CRITICAL FIX: Calculate elapsed time using server timestamp
       // Firebase ServerValue.TIMESTAMP is resolved by the server to a number
       let startTimeMs = data.startTime;
       if (typeof startTimeMs === 'object' && startTimeMs !== null) {
         // ServerValue.TIMESTAMP placeholder - wait for it to resolve
         return;
-      } else if (typeof startTimeMs !== 'number') {
+      } else if (typeof startTimeMs !== 'number' || isNaN(startTimeMs)) {
         return;
       }
       
-      // CRITICAL FIX: Calculate remaining time correctly
+      // CRITICAL FIX: Calculate remaining time correctly with NaN protection
       // remaining = phaseDuration - (totalElapsedTime + currentElapsed)
-      // currentElapsed = (now - startTimeMs) / 1000
       const currentElapsed = Math.floor((now - startTimeMs) / 1000);
-      const totalElapsed = (data.totalElapsedTime || 0) + currentElapsed;
-      const calculatedRemaining = Math.max(0, data.phaseDuration - totalElapsed);
+      const calculatedRemaining = calculateRemainingTime(
+        state.phaseDuration,
+        state.totalElapsedTime,
+        currentElapsed
+      );
       
       // Update state from authoritative source (Firebase) - ALL devices are passive listeners
+      // This includes the device that wrote the change
       state.remainingTime = calculatedRemaining;
       state.startTime = startTimeMs;
       state.isRunning = true;
     } else if (!data.isRunning) {
       // If remote is paused, use the stored values
       // remainingTime = phaseDuration - totalElapsedTime (already calculated)
-      if (data.remainingTime !== undefined) {
-        state.remainingTime = data.remainingTime;
+      if (data.remainingTime !== undefined && !isNaN(data.remainingTime)) {
+        state.remainingTime = Number(data.remainingTime);
       } else {
         updateRemainingTime();
       }
@@ -225,6 +247,7 @@ function setupFirebaseListeners() {
     }
     
     // Update timer intervals based on running state
+    // CRITICAL: This must happen for ALL devices, including the one that wrote the change
     if (state.isRunning && !wasRunning) {
       // Timer was started (by us or remotely) - start local countdown for UI
       if (!timerInterval) {
@@ -240,6 +263,7 @@ function setupFirebaseListeners() {
     
     // CRITICAL: Always update UI from Firebase state
     // This ensures the initiating device also updates when it receives its own write confirmation
+    // This fixes the "asymmetric freezing" bug where the writing device doesn't update
     updateUI();
     
     // Check if timer reached zero
@@ -327,7 +351,9 @@ function pauseTimer() {
   if (state.isRunning && state.startTime) {
     const now = Date.now();
     const elapsed = Math.floor((now - state.startTime) / 1000);
-    state.totalElapsedTime += elapsed;
+    // Ensure totalElapsedTime is a valid number
+    const currentTotal = Number(state.totalElapsedTime) || 0;
+    state.totalElapsedTime = currentTotal + elapsed;
     // Update remaining time: remaining = phaseDuration - totalElapsedTime
     updateRemainingTime();
   }
@@ -355,11 +381,14 @@ function updateTimer() {
   // Calculate: remaining = phaseDuration - (totalElapsedTime + currentElapsed)
   const now = Date.now();
   const currentElapsed = Math.floor((now - state.startTime) / 1000);
-  const totalElapsed = state.totalElapsedTime + currentElapsed;
-  const calculatedRemaining = Math.max(0, state.phaseDuration - totalElapsed);
+  const calculatedRemaining = calculateRemainingTime(
+    state.phaseDuration,
+    state.totalElapsedTime,
+    currentElapsed
+  );
   
   // Only update if it's a reasonable value (Firebase listener will correct if needed)
-  if (calculatedRemaining >= 0 && calculatedRemaining <= state.phaseDuration) {
+  if (!isNaN(calculatedRemaining) && calculatedRemaining >= 0 && calculatedRemaining <= state.phaseDuration) {
     state.remainingTime = calculatedRemaining;
   }
   
@@ -549,12 +578,17 @@ function writeStateToFirebase() {
     // or: phaseDuration - (totalElapsedTime + currentElapsed) (when running)
     // We write the base values so all devices can calculate correctly
     
+    // CRITICAL: Ensure all numeric values are valid numbers before writing
+    const phaseDuration = Number(state.phaseDuration) || (state.settings.focusTime * 60);
+    const totalElapsedTime = Number(state.totalElapsedTime) || 0;
+    const remainingTime = Number(state.remainingTime) || phaseDuration;
+    
     const data = {
       phase: state.phase,
       isRunning: state.isRunning,
-      phaseDuration: state.phaseDuration, // Total duration for current phase
-      totalElapsedTime: state.totalElapsedTime, // Total elapsed across all cycles
-      remainingTime: state.remainingTime, // Current remaining (for paused state)
+      phaseDuration: phaseDuration, // Total duration for current phase (always a number)
+      totalElapsedTime: totalElapsedTime, // Total elapsed across all cycles (always a number)
+      remainingTime: remainingTime, // Current remaining (for paused state, always a number)
       // Use Firebase ServerValue.TIMESTAMP for accurate server time when starting
       startTime: state.isRunning ? firebase.database.ServerValue.TIMESTAMP : null,
       cycleCount: state.cycleCount,
@@ -576,9 +610,15 @@ function writeStateToFirebase() {
 }
 
 function updateUI() {
-  // Update timer display
-  const minutes = Math.floor(state.remainingTime / 60);
-  const seconds = state.remainingTime % 60;
+  // Update timer display with NaN protection
+  const remaining = Number(state.remainingTime) || 0;
+  if (isNaN(remaining) || remaining < 0) {
+    timerEl.textContent = '00:00';
+    return;
+  }
+  
+  const minutes = Math.floor(remaining / 60);
+  const seconds = remaining % 60;
   timerEl.textContent = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
   
   // Update phase label
