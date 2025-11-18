@@ -165,6 +165,7 @@ function setupFirebaseListeners() {
     
     // CRITICAL FIX: ALL devices must be passive listeners, including the one that initiated the change
     // This ensures the initiating device also updates from Firebase confirmation
+    // REMOVED: isAuthoritativeDevice check - all devices process all updates
     
     // If we were authoritative but received an update from another device,
     // we're no longer authoritative (another device took control)
@@ -175,9 +176,8 @@ function setupFirebaseListeners() {
     const wasRunning = state.isRunning;
     const now = Date.now();
     
-    // Calculate server time offset for clock drift correction
-    const serverTime = data.serverTime || now;
-    const timeDiff = now - serverTime; // Positive if local clock is ahead
+    // CRITICAL FIX: Removed serverTime and timeDiff - they cause time drift
+    // We rely ONLY on startTime (ServerValue.TIMESTAMP) for all time calculations
     
     // CRITICAL FIX: Use phaseDuration and totalElapsedTime for accurate calculation
     // Update phaseDuration and totalElapsedTime from Firebase with NaN protection
@@ -545,16 +545,34 @@ function resetTimer() {
   // Mark as authoritative (the device that clicked Reset)
   isAuthoritativeDevice = true;
   
-  pauseTimer();
+  // CRITICAL FIX: Stop any running timer first
+  if (state.isRunning) {
+    pauseTimer();
+  } else {
+    // If not running, still clear intervals and reset state
+    if (timerInterval) {
+      clearInterval(timerInterval);
+      timerInterval = null;
+    }
+    state.isRunning = false;
+    state.startTime = null;
+  }
   
+  // CRITICAL FIX: Reset all state to clean initial values
   state.phase = 'focus';
-  setPhaseDuration(state.settings.focusTime * 60);
   state.cycleCount = 1;
   state.accumulatedBreakTime = 0;
   state.isInAccumulatedBreak = false;
   state.accumulatedBreakRemaining = 0;
   state.savedFocusTime = null;
   
+  // CRITICAL FIX: Set phaseDuration and reset totalElapsedTime to 0
+  // This ensures a clean reset state before any subsequent start
+  state.phaseDuration = state.settings.focusTime * 60;
+  state.totalElapsedTime = 0;
+  state.remainingTime = state.phaseDuration;
+  
+  // Write clean reset state to Firebase
   writeStateToFirebase();
   updateUI();
 }
@@ -598,7 +616,7 @@ function writeStateToFirebase() {
       savedFocusTime: state.savedFocusTime,
       settings: state.settings,
       authorDevice: deviceId, // Track which device made this change
-      serverTime: Date.now() // Local time for offset calculation
+      // REMOVED: serverTime - causes time drift, we use ServerValue.TIMESTAMP only
     };
     
     timerRef.set(data).catch(error => {
