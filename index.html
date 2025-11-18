@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pomodoro Sync - Multi-Device Timer</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🍅 Pomodoro Sync</h1>
+            <p class="subtitle">Multi-Device Synchronized Timer</p>
+        </header>
+
+        <main>
+            <div class="timer-section">
+                <div class="phase-indicator">
+                    <span id="phase-label">Focus</span>
+                    <span id="cycle-count" class="cycle-count">Cycle 1 of 4</span>
+                </div>
+                
+                <div class="timer-display">
+                    <div id="timer" class="timer">50:00</div>
+                </div>
+
+                <div class="controls">
+                    <button id="start-pause-btn" class="btn btn-primary">Start</button>
+                    <button id="skip-break-btn" class="btn btn-secondary" style="display: none;">Skip Break</button>
+                    <button id="take-break-btn" class="btn btn-secondary" style="display: none;">Take Accumulated Break</button>
+                    <button id="resume-focus-btn" class="btn btn-secondary" style="display: none;">Resume Focus</button>
+                    <button id="reset-btn" class="btn btn-danger">Reset</button>
+                    <button id="settings-btn" class="btn btn-secondary">Settings</button>
+                </div>
+
+                <div class="accumulated-break">
+                    <span>Accumulated Break Time: </span>
+                    <span id="accumulated-time">0:00</span>
+                </div>
+            </div>
+
+            <div id="settings-panel" class="settings-panel" style="display: none;">
+                <h2>Settings</h2>
+                <div class="settings-group">
+                    <label for="focus-time">Focus Time (minutes):</label>
+                    <input type="number" id="focus-time" min="1" max="120" value="50">
+                </div>
+                <div class="settings-group">
+                    <label for="break-time">Break Time (minutes):</label>
+                    <input type="number" id="break-time" min="1" max="60" value="10">
+                </div>
+                <div class="settings-group">
+                    <label for="long-break-time">Long Break Time (minutes):</label>
+                    <input type="number" id="long-break-time" min="1" max="120" value="30">
+                </div>
+                <div class="settings-group">
+                    <label for="long-break-interval">Long Break After (cycles):</label>
+                    <input type="number" id="long-break-interval" min="1" max="10" value="4">
+                </div>
+                <div class="settings-actions">
+                    <button id="save-settings-btn" class="btn btn-primary">Save Settings</button>
+                    <button id="close-settings-btn" class="btn btn-secondary">Close</button>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
+
