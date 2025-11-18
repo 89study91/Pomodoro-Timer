@@ -1,0 +1,222 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 20px;
+    color: #333;
+}
+
+.container {
+    background: white;
+    border-radius: 20px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+    padding: 40px;
+    max-width: 600px;
+    width: 100%;
+    text-align: center;
+}
+
+header {
+    margin-bottom: 30px;
+}
+
+header h1 {
+    font-size: 2.5em;
+    color: #667eea;
+    margin-bottom: 10px;
+}
+
+.subtitle {
+    color: #666;
+    font-size: 1em;
+}
+
+.timer-section {
+    margin-bottom: 30px;
+}
+
+.phase-indicator {
+    margin-bottom: 20px;
+}
+
+#phase-label {
+    font-size: 1.5em;
+    font-weight: bold;
+    color: #667eea;
+    display: block;
+    margin-bottom: 5px;
+}
+
+.cycle-count {
+    font-size: 0.9em;
+    color: #888;
+}
+
+.timer-display {
+    margin: 30px 0;
+}
+
+.timer {
+    font-size: 5em;
+    font-weight: bold;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.05em;
+    transition: color 0.3s ease;
+}
+
+.timer-focus {
+    color: #667eea;
+}
+
+.timer-break {
+    color: #48bb78;
+}
+
+.controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    justify-content: center;
+    margin-bottom: 20px;
+}
+
+.btn {
+    padding: 12px 24px;
+    font-size: 1em;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    font-weight: 600;
+    min-width: 120px;
+}
+
+.btn-primary {
+    background: #667eea;
+    color: white;
+}
+
+.btn-primary:hover {
+    background: #5568d3;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+}
+
+.btn-secondary {
+    background: #e2e8f0;
+    color: #4a5568;
+}
+
+.btn-secondary:hover {
+    background: #cbd5e0;
+    transform: translateY(-2px);
+}
+
+.btn-danger {
+    background: #f56565;
+    color: white;
+}
+
+.btn-danger:hover {
+    background: #e53e3e;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(245, 101, 101, 0.4);
+}
+
+.accumulated-break {
+    padding: 15px;
+    background: #f7fafc;
+    border-radius: 8px;
+    font-size: 1.1em;
+    color: #4a5568;
+    margin-top: 20px;
+}
+
+#accumulated-time {
+    font-weight: bold;
+    color: #667eea;
+}
+
+.settings-panel {
+    margin-top: 30px;
+    padding: 30px;
+    background: #f7fafc;
+    border-radius: 12px;
+    text-align: left;
+}
+
+.settings-panel h2 {
+    margin-bottom: 20px;
+    color: #667eea;
+    text-align: center;
+}
+
+.settings-group {
+    margin-bottom: 20px;
+}
+
+.settings-group label {
+    display: block;
+    margin-bottom: 8px;
+    font-weight: 600;
+    color: #4a5568;
+}
+
+.settings-group input {
+    width: 100%;
+    padding: 10px;
+    border: 2px solid #e2e8f0;
+    border-radius: 6px;
+    font-size: 1em;
+    transition: border-color 0.3s ease;
+}
+
+.settings-group input:focus {
+    outline: none;
+    border-color: #667eea;
+}
+
+.settings-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    margin-top: 30px;
+}
+
+@media (max-width: 600px) {
+    .container {
+        padding: 20px;
+    }
+    
+    header h1 {
+        font-size: 2em;
+    }
+    
+    .timer {
+        font-size: 3.5em;
+    }
+    
+    .btn {
+        min-width: 100px;
+        padding: 10px 20px;
+        font-size: 0.9em;
+    }
+    
+    .controls {
+        flex-direction: column;
+    }
+    
+    .controls .btn {
+        width: 100%;
+    }
+}
+
