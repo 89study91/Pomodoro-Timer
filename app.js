@@ -59,7 +59,6 @@ const TIMER_TICK = 100; // Update timer every 100ms for smooth display
 
 // Generate unique device ID for this session
 const deviceId = 'device_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-let isAuthoritativeDevice = false; // Only true when this device initiates Start/Pause/Reset
 
 // DOM Elements (will be initialized after DOM loads)
 let timerEl, phaseLabelEl, cycleCountEl, startPauseBtn, skipBreakBtn, takeBreakBtn;
@@ -162,16 +161,6 @@ function setupFirebaseListeners() {
   timerRef.on('value', (snapshot) => {
     const data = snapshot.val();
     if (!data) return;
-    
-    // CRITICAL FIX: ALL devices must be passive listeners, including the one that initiated the change
-    // This ensures the initiating device also updates from Firebase confirmation
-    // REMOVED: isAuthoritativeDevice check - all devices process all updates
-    
-    // If we were authoritative but received an update from another device,
-    // we're no longer authoritative (another device took control)
-    if (isAuthoritativeDevice && data.authorDevice && data.authorDevice !== deviceId) {
-      isAuthoritativeDevice = false;
-    }
     
     const wasRunning = state.isRunning;
     const now = Date.now();
@@ -295,8 +284,6 @@ function saveSettingsHandler() {
   state.settings.longBreakInterval = parseInt(longBreakIntervalInput.value) || 4;
   
   saveSettings();
-  // Mark as authoritative and write settings to Firebase
-  isAuthoritativeDevice = true;
   writeStateToFirebase();
   settingsPanel.style.display = 'none';
   
@@ -322,9 +309,6 @@ function toggleTimer() {
 function startTimer() {
   if (state.isRunning) return;
   
-  // Mark this device as authoritative (the one that initiated Start)
-  isAuthoritativeDevice = true;
-  
   // CRITICAL FIX: When starting/resuming, we use phaseDuration and totalElapsedTime
   // remainingTime = phaseDuration - totalElapsedTime (calculated correctly)
   // We don't change totalElapsedTime here - it only increases when we pause
@@ -343,9 +327,6 @@ function startTimer() {
 }
 
 function pauseTimer() {
-  // Mark this device as authoritative (the one that initiated Pause)
-  isAuthoritativeDevice = true;
-  
   // CRITICAL FIX: Calculate elapsed time since last start and add to totalElapsedTime
   // When pausing: totalElapsedTime += elapsed, remainingTime = phaseDuration - totalElapsedTime
   if (state.isRunning && state.startTime) {
@@ -401,9 +382,6 @@ function updateTimer() {
 }
 
 function handlePhaseComplete() {
-  // Mark as authoritative - this device detected the phase completion
-  isAuthoritativeDevice = true;
-  
   pauseTimer();
   
   if (state.phase === 'focus') {
@@ -542,9 +520,6 @@ function resumeFocus() {
 }
 
 function resetTimer() {
-  // Mark as authoritative (the device that clicked Reset)
-  isAuthoritativeDevice = true;
-  
   // CRITICAL FIX: Stop any running timer first
   if (state.isRunning) {
     pauseTimer();
@@ -586,7 +561,7 @@ function getBreakTime() {
 
 // Write state to Firebase - ONLY called by authoritative device on state changes
 function writeStateToFirebase() {
-  if (!database || !isAuthoritativeDevice) return;
+  if (!database) return;
   
   try {
     const timerRef = database.ref('timer');
