@@ -54,10 +54,11 @@ let state = {
 };
 
 let timerInterval = null;
-let syncInterval = null;
-const SYNC_INTERVAL = 1000; // Sync every second
 const TIMER_TICK = 100; // Update timer every 100ms for smooth display
-let lastSyncTime = 0; // Track last sync time to prevent feedback loops
+
+// Generate unique device ID for this session
+const deviceId = 'device_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+let isAuthoritativeDevice = false; // Only true when this device initiates Start/Pause/Reset
 
 // DOM Elements (will be initialized after DOM loads)
 let timerEl, phaseLabelEl, cycleCountEl, startPauseBtn, skipBreakBtn, takeBreakBtn;
@@ -145,81 +146,91 @@ function setupFirebaseListeners() {
     const data = snapshot.val();
     if (!data) return;
     
-    // Prevent processing our own immediate updates (within 100ms)
-    const now = Date.now();
-    if (now - lastSyncTime < 100) {
-      return; // Likely our own update, ignore it
+    // CRITICAL: If this is our own update (we're the author), don't process it
+    // We only process updates from other devices or when we're not authoritative
+    if (data.authorDevice === deviceId && isAuthoritativeDevice) {
+      // This is our own update, ignore it to prevent feedback loops
+      return;
+    }
+    
+    // If we were authoritative but received an update from another device,
+    // we're no longer authoritative (another device took control)
+    if (isAuthoritativeDevice && data.authorDevice !== deviceId) {
+      isAuthoritativeDevice = false;
     }
     
     const wasRunning = state.isRunning;
+    const now = Date.now();
     
     // Calculate remaining time based on server time to prevent clock drift
     const serverTime = data.serverTime || now;
     const timeDiff = now - serverTime;
     
     if (data.isRunning && data.startTime && data.remainingTimeAtStart !== null) {
-      // CRITICAL FIX: Calculate elapsed time using server time offset
-      // remainingTimeAtStart is the time when the timer started/resumed
-      // We calculate elapsed = (current time - start time), accounting for clock drift
-      const elapsed = Math.floor((now - data.startTime - timeDiff) / 1000);
+      // CRITICAL FIX: Calculate elapsed time using server timestamp
+      // Firebase ServerValue.TIMESTAMP is resolved by the server to a number
+      // Handle both ServerValue placeholder object and resolved timestamp number
+      let startTimeMs = data.startTime;
+      if (typeof startTimeMs === 'object' && startTimeMs !== null) {
+        // ServerValue.TIMESTAMP placeholder - estimate server time
+        // This happens if we read before server resolves it (rare)
+        startTimeMs = now - timeDiff;
+      } else if (typeof startTimeMs !== 'number') {
+        // Invalid timestamp, skip this update
+        return;
+      }
+      
+      // Calculate elapsed time accounting for clock drift
+      // elapsed = (current local time - start server time - clock offset)
+      const elapsed = Math.floor((now - startTimeMs - timeDiff) / 1000);
       const calculatedRemaining = Math.max(0, data.remainingTimeAtStart - elapsed);
       
-      // Update if we're not running locally, or if the remote state differs significantly
-      // This prevents overwriting our own updates with stale remote data
-      if (!wasRunning || Math.abs(calculatedRemaining - state.remainingTime) > 2) {
+      // Update state from authoritative source (Firebase) - PASSIVE LISTENER
+      // Only update if this is a significant change or we're not running locally
+      if (!wasRunning || Math.abs(calculatedRemaining - state.remainingTime) > 1) {
         state.remainingTime = calculatedRemaining;
-        state.initialRemainingTime = data.remainingTimeAtStart; // Use the remote initial time
-        state.startTime = data.startTime; // Use the remote start time
+        state.initialRemainingTime = data.remainingTimeAtStart;
+        state.startTime = startTimeMs;
+        state.isRunning = true;
       }
     } else if (!data.isRunning) {
       // If remote is paused, use the stored remaining time
-      // This is the paused time, which should be synced across devices
-      // Only update if we're also paused or if the difference is significant
-      if (!wasRunning || Math.abs((data.remainingTime || state.remainingTime) - state.remainingTime) > 2) {
-        setRemainingTime(data.remainingTime || state.remainingTime);
+      setRemainingTime(data.remainingTime || state.remainingTime);
+      state.isRunning = false;
+      state.startTime = null;
+    }
+    
+    // Sync other state properties from authoritative source
+    state.phase = data.phase !== undefined ? data.phase : state.phase;
+    state.cycleCount = data.cycleCount !== undefined ? data.cycleCount : state.cycleCount;
+    state.accumulatedBreakTime = data.accumulatedBreakTime !== undefined ? data.accumulatedBreakTime : state.accumulatedBreakTime;
+    state.isInAccumulatedBreak = data.isInAccumulatedBreak !== undefined ? data.isInAccumulatedBreak : state.isInAccumulatedBreak;
+    state.accumulatedBreakRemaining = data.accumulatedBreakRemaining !== undefined ? data.accumulatedBreakRemaining : state.accumulatedBreakRemaining;
+    state.savedFocusTime = data.savedFocusTime !== undefined ? data.savedFocusTime : state.savedFocusTime;
+    
+    if (data.settings) {
+      state.settings = { ...state.settings, ...data.settings };
+    }
+    
+    // Update timer intervals based on running state
+    if (state.isRunning && !wasRunning) {
+      // Timer was started remotely - start local countdown
+      if (!timerInterval) {
+        timerInterval = setInterval(updateTimer, TIMER_TICK);
+      }
+    } else if (!state.isRunning && wasRunning) {
+      // Timer was paused remotely - stop local countdown
+      if (timerInterval) {
+        clearInterval(timerInterval);
+        timerInterval = null;
       }
     }
-      
-      // Sync other state properties
-      state.phase = data.phase !== undefined ? data.phase : state.phase;
-      state.isRunning = data.isRunning !== undefined ? data.isRunning : state.isRunning;
-      state.cycleCount = data.cycleCount !== undefined ? data.cycleCount : state.cycleCount;
-      state.accumulatedBreakTime = data.accumulatedBreakTime !== undefined ? data.accumulatedBreakTime : state.accumulatedBreakTime;
-      state.isInAccumulatedBreak = data.isInAccumulatedBreak !== undefined ? data.isInAccumulatedBreak : state.isInAccumulatedBreak;
-      state.accumulatedBreakRemaining = data.accumulatedBreakRemaining !== undefined ? data.accumulatedBreakRemaining : state.accumulatedBreakRemaining;
-      state.savedFocusTime = data.savedFocusTime !== undefined ? data.savedFocusTime : state.savedFocusTime;
-      
-      if (data.settings) {
-        state.settings = { ...state.settings, ...data.settings };
-      }
-      
-      // Update timer intervals based on running state
-      if (state.isRunning && !wasRunning) {
-        // Timer was started remotely
-        if (!timerInterval) {
-          timerInterval = setInterval(updateTimer, TIMER_TICK);
-        }
-        if (!syncInterval) {
-          syncInterval = setInterval(syncToFirebase, SYNC_INTERVAL);
-        }
-      } else if (!state.isRunning && wasRunning) {
-        // Timer was paused remotely
-        if (timerInterval) {
-          clearInterval(timerInterval);
-          timerInterval = null;
-        }
-        if (syncInterval) {
-          clearInterval(syncInterval);
-          syncInterval = null;
-        }
-      }
-      
-      updateUI();
-      
-      // Check if timer reached zero
-      if (state.remainingTime <= 0 && state.isRunning) {
-        handlePhaseComplete();
-      }
+    
+    updateUI();
+    
+    // Check if timer reached zero
+    if (state.remainingTime <= 0 && state.isRunning) {
+      handlePhaseComplete();
     }
   });
 }
@@ -246,7 +257,9 @@ function saveSettingsHandler() {
   state.settings.longBreakInterval = parseInt(longBreakIntervalInput.value) || 4;
   
   saveSettings();
-  syncToFirebase();
+  // Mark as authoritative and write settings to Firebase
+  isAuthoritativeDevice = true;
+  writeStateToFirebase();
   settingsPanel.style.display = 'none';
   
   // If timer is not running, update the display
@@ -271,28 +284,31 @@ function toggleTimer() {
 function startTimer() {
   if (state.isRunning) return;
   
+  // Mark this device as authoritative (the one that initiated Start)
+  isAuthoritativeDevice = true;
+  
   // CRITICAL: When resuming from pause, use the CURRENT remainingTime (paused time)
   // as the initialRemainingTime. This ensures we resume from where we paused, not from full duration.
   state.initialRemainingTime = state.remainingTime;
   state.isRunning = true;
-  state.startTime = Date.now();
-  
-  // Sync immediately to Firebase with correct values
-  syncToFirebase();
-  updateUI();
   
   // Clear any existing intervals
   if (timerInterval) clearInterval(timerInterval);
-  if (syncInterval) clearInterval(syncInterval);
   
-  // Start local timer countdown
+  // Write to Firebase with ServerValue.TIMESTAMP for accurate server time
+  // ONLY the authoritative device writes to Firebase
+  writeStateToFirebase();
+  
+  updateUI();
+  
+  // Start local timer countdown (only for UI updates)
   timerInterval = setInterval(updateTimer, TIMER_TICK);
-  
-  // Sync to Firebase periodically
-  syncInterval = setInterval(syncToFirebase, SYNC_INTERVAL);
 }
 
 function pauseTimer() {
+  // Mark this device as authoritative (the one that initiated Pause)
+  isAuthoritativeDevice = true;
+  
   state.isRunning = false;
   state.startTime = null;
   state.initialRemainingTime = state.remainingTime; // Update initial to current when pausing
@@ -302,12 +318,9 @@ function pauseTimer() {
     timerInterval = null;
   }
   
-  if (syncInterval) {
-    clearInterval(syncInterval);
-    syncInterval = null;
-  }
+  // Write to Firebase - ONLY the authoritative device writes
+  writeStateToFirebase();
   
-  syncToFirebase();
   updateUI();
 }
 
@@ -330,6 +343,9 @@ function updateTimer() {
 }
 
 function handlePhaseComplete() {
+  // Mark as authoritative - this device detected the phase completion
+  isAuthoritativeDevice = true;
+  
   pauseTimer();
   
   if (state.phase === 'focus') {
@@ -385,7 +401,9 @@ function handlePhaseComplete() {
     }, 1000);
   }
   
-  syncToFirebase();
+  // handlePhaseComplete is called from updateTimer, so we're already authoritative
+  // Just write the state change
+  writeStateToFirebase();
   updateUI();
 }
 
@@ -406,7 +424,8 @@ function skipBreak() {
   state.phase = 'focus';
   setRemainingTime(state.settings.focusTime * 60);
   
-  syncToFirebase();
+  // skipBreak calls pauseTimer which marks us as authoritative
+  writeStateToFirebase();
   updateUI();
   
   // Auto-start focus
@@ -429,7 +448,8 @@ function takeAccumulatedBreak() {
   state.phase = 'break';
   setRemainingTime(state.accumulatedBreakTime);
   
-  syncToFirebase();
+  // takeAccumulatedBreak calls pauseTimer which marks us as authoritative
+  writeStateToFirebase();
   updateUI();
   
   // Auto-start accumulated break
@@ -453,7 +473,8 @@ function resumeFocus() {
   setRemainingTime(state.savedFocusTime || state.settings.focusTime * 60);
   state.savedFocusTime = null;
   
-  syncToFirebase();
+  // resumeFocus calls pauseTimer which marks us as authoritative
+  writeStateToFirebase();
   updateUI();
   
   // Auto-start focus
@@ -463,6 +484,9 @@ function resumeFocus() {
 }
 
 function resetTimer() {
+  // Mark as authoritative (the device that clicked Reset)
+  isAuthoritativeDevice = true;
+  
   pauseTimer();
   
   state.phase = 'focus';
@@ -473,7 +497,7 @@ function resetTimer() {
   state.accumulatedBreakRemaining = 0;
   state.savedFocusTime = null;
   
-  syncToFirebase();
+  writeStateToFirebase();
   updateUI();
 }
 
@@ -484,48 +508,44 @@ function getBreakTime() {
   return isLongBreak ? state.settings.longBreakTime : state.settings.breakTime;
 }
 
-function syncToFirebase() {
-  if (!database) return;
+// Write state to Firebase - ONLY called by authoritative device on state changes
+function writeStateToFirebase() {
+  if (!database || !isAuthoritativeDevice) return;
   
   try {
     const timerRef = database.ref('timer');
     
     // CRITICAL FIX: When running, remainingTimeAtStart should be the initialRemainingTime
     // (the time when we started/resumed), NOT the current remainingTime + elapsed.
-    // This ensures remote devices can calculate the correct remaining time.
     let remainingTimeAtStart;
     if (state.isRunning) {
-      // Use initialRemainingTime (the time when timer started/resumed from pause)
-      // This is the paused time that we resumed from
       remainingTimeAtStart = state.initialRemainingTime;
     } else {
-      // When paused, remainingTimeAtStart equals current remainingTime
       remainingTimeAtStart = state.remainingTime;
     }
     
     const data = {
       phase: state.phase,
       isRunning: state.isRunning,
-      remainingTime: state.remainingTime, // Current remaining time (for paused state)
-      remainingTimeAtStart: remainingTimeAtStart, // Time at start/resume (for running state)
-      startTime: state.isRunning ? state.startTime : null,
+      remainingTime: state.remainingTime,
+      remainingTimeAtStart: remainingTimeAtStart,
+      // Use Firebase ServerValue.TIMESTAMP for accurate server time when starting
+      startTime: state.isRunning ? firebase.database.ServerValue.TIMESTAMP : null,
       cycleCount: state.cycleCount,
       accumulatedBreakTime: state.accumulatedBreakTime,
       isInAccumulatedBreak: state.isInAccumulatedBreak,
       accumulatedBreakRemaining: state.accumulatedBreakRemaining,
       savedFocusTime: state.savedFocusTime,
       settings: state.settings,
-      serverTime: Date.now() // Current local time (will be used to calculate offset)
+      authorDevice: deviceId, // Track which device made this change
+      serverTime: Date.now() // Local time for offset calculation
     };
     
-    // Track when we sync to prevent feedback loops
-    lastSyncTime = Date.now();
-    
     timerRef.set(data).catch(error => {
-      console.error('Firebase sync error:', error);
+      console.error('Firebase write error:', error);
     });
   } catch (error) {
-    console.error('Firebase sync error:', error);
+    console.error('Firebase write error:', error);
   }
 }
 
