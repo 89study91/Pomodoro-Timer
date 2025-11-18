@@ -37,8 +37,9 @@ let state = {
   phase: 'focus', // 'focus' or 'break'
   isRunning: false,
   startTime: null,
-  initialRemainingTime: 50 * 60, // Time remaining when timer started (in seconds)
-  remainingTime: 50 * 60, // Current remaining time (in seconds)
+  phaseDuration: 50 * 60, // Total duration for current phase (in seconds)
+  totalElapsedTime: 0, // Total elapsed time across all start/pause cycles (in seconds)
+  remainingTime: 50 * 60, // Current remaining time (in seconds) = phaseDuration - totalElapsedTime
   cycleCount: 1,
   accumulatedBreakTime: 0, // in seconds
   settings: {
@@ -128,10 +129,16 @@ function saveSettings() {
   localStorage.setItem('pomodoroSettings', JSON.stringify(state.settings));
 }
 
-// Helper function to set remaining time (updates both remainingTime and initialRemainingTime)
-function setRemainingTime(seconds) {
+// Helper function to set phase duration and reset elapsed time
+function setPhaseDuration(seconds) {
+  state.phaseDuration = seconds;
+  state.totalElapsedTime = 0;
   state.remainingTime = seconds;
-  state.initialRemainingTime = seconds;
+}
+
+// Helper function to update remaining time from phase duration and elapsed time
+function updateRemainingTime() {
+  state.remainingTime = Math.max(0, state.phaseDuration - state.totalElapsedTime);
 }
 
 function setupFirebaseListeners() {
@@ -162,38 +169,45 @@ function setupFirebaseListeners() {
     const serverTime = data.serverTime || now;
     const timeDiff = now - serverTime; // Positive if local clock is ahead
     
-    if (data.isRunning && data.startTime && data.remainingTimeAtStart !== null) {
+    // CRITICAL FIX: Use phaseDuration and totalElapsedTime for accurate calculation
+    // Update phaseDuration and totalElapsedTime from Firebase
+    if (data.phaseDuration !== undefined) {
+      state.phaseDuration = data.phaseDuration;
+    }
+    if (data.totalElapsedTime !== undefined) {
+      state.totalElapsedTime = data.totalElapsedTime;
+    }
+    
+    if (data.isRunning && data.startTime && data.phaseDuration !== undefined) {
       // CRITICAL FIX: Calculate elapsed time using server timestamp
       // Firebase ServerValue.TIMESTAMP is resolved by the server to a number
       let startTimeMs = data.startTime;
       if (typeof startTimeMs === 'object' && startTimeMs !== null) {
         // ServerValue.TIMESTAMP placeholder - wait for it to resolve
-        // Don't process until server resolves it
         return;
       } else if (typeof startTimeMs !== 'number') {
-        // Invalid timestamp, skip this update
         return;
       }
       
-      // CRITICAL FIX: Calculate elapsed time correctly
-      // startTimeMs is server timestamp (from ServerValue.TIMESTAMP) when timer started
-      // Both startTimeMs and current time are in the same reference (server time)
-      // We calculate elapsed directly: elapsed = (current time - start time)
-      // Since startTimeMs is server time, we use local time but account for any drift
-      // The simplest approach: elapsed = (now - startTimeMs) / 1000
-      // This works because both are timestamps in milliseconds
-      const elapsed = Math.floor((now - startTimeMs) / 1000);
-      const calculatedRemaining = Math.max(0, data.remainingTimeAtStart - elapsed);
+      // CRITICAL FIX: Calculate remaining time correctly
+      // remaining = phaseDuration - (totalElapsedTime + currentElapsed)
+      // currentElapsed = (now - startTimeMs) / 1000
+      const currentElapsed = Math.floor((now - startTimeMs) / 1000);
+      const totalElapsed = (data.totalElapsedTime || 0) + currentElapsed;
+      const calculatedRemaining = Math.max(0, data.phaseDuration - totalElapsed);
       
       // Update state from authoritative source (Firebase) - ALL devices are passive listeners
       state.remainingTime = calculatedRemaining;
-      state.initialRemainingTime = data.remainingTimeAtStart;
       state.startTime = startTimeMs;
       state.isRunning = true;
     } else if (!data.isRunning) {
-      // If remote is paused, use the stored remaining time (elapsed time was already subtracted)
-      // remainingTime in Firebase is the paused time (after subtracting elapsed)
-      setRemainingTime(data.remainingTime || state.remainingTime);
+      // If remote is paused, use the stored values
+      // remainingTime = phaseDuration - totalElapsedTime (already calculated)
+      if (data.remainingTime !== undefined) {
+        state.remainingTime = data.remainingTime;
+      } else {
+        updateRemainingTime();
+      }
       state.isRunning = false;
       state.startTime = null;
     }
@@ -265,9 +279,9 @@ function saveSettingsHandler() {
   // If timer is not running, update the display
   if (!state.isRunning) {
     if (state.phase === 'focus') {
-      setRemainingTime(state.settings.focusTime * 60);
+      setPhaseDuration(state.settings.focusTime * 60);
     } else {
-      setRemainingTime(getBreakTime() * 60);
+      setPhaseDuration(getBreakTime() * 60);
     }
     updateUI();
   }
@@ -287,9 +301,9 @@ function startTimer() {
   // Mark this device as authoritative (the one that initiated Start)
   isAuthoritativeDevice = true;
   
-  // CRITICAL FIX: When resuming from pause, use the CURRENT remainingTime (paused time)
-  // as the initialRemainingTime. This ensures we resume from where we paused, not from full duration.
-  state.initialRemainingTime = state.remainingTime;
+  // CRITICAL FIX: When starting/resuming, we use phaseDuration and totalElapsedTime
+  // remainingTime = phaseDuration - totalElapsedTime (calculated correctly)
+  // We don't change totalElapsedTime here - it only increases when we pause
   state.isRunning = true;
   // startTime will be set by Firebase ServerValue.TIMESTAMP when we write
   
@@ -308,18 +322,18 @@ function pauseTimer() {
   // Mark this device as authoritative (the one that initiated Pause)
   isAuthoritativeDevice = true;
   
-  // CRITICAL FIX: Calculate elapsed time and store the remaining time
-  // When pausing, we need to calculate how much time has elapsed since start
-  // and store the remaining time (not reset to initial)
-  if (state.isRunning && state.startTime && state.initialRemainingTime !== null) {
+  // CRITICAL FIX: Calculate elapsed time since last start and add to totalElapsedTime
+  // When pausing: totalElapsedTime += elapsed, remainingTime = phaseDuration - totalElapsedTime
+  if (state.isRunning && state.startTime) {
     const now = Date.now();
     const elapsed = Math.floor((now - state.startTime) / 1000);
-    state.remainingTime = Math.max(0, state.initialRemainingTime - elapsed);
+    state.totalElapsedTime += elapsed;
+    // Update remaining time: remaining = phaseDuration - totalElapsedTime
+    updateRemainingTime();
   }
   
   state.isRunning = false;
   state.startTime = null;
-  // Keep initialRemainingTime for potential resume
   
   if (timerInterval) {
     clearInterval(timerInterval);
@@ -327,7 +341,7 @@ function pauseTimer() {
   }
   
   // Write to Firebase - ONLY the authoritative device writes
-  // Write the calculated remainingTime (after subtracting elapsed)
+  // Write phaseDuration, totalElapsedTime, and calculated remainingTime
   writeStateToFirebase();
   
   updateUI();
@@ -338,13 +352,14 @@ function updateTimer() {
   
   // CRITICAL: Local timer is only for UI updates
   // The authoritative time comes from Firebase listener calculations
-  // This local calculation is just for smooth UI updates between Firebase syncs
+  // Calculate: remaining = phaseDuration - (totalElapsedTime + currentElapsed)
   const now = Date.now();
-  const elapsed = Math.floor((now - state.startTime) / 1000);
-  const calculatedRemaining = Math.max(0, state.initialRemainingTime - elapsed);
+  const currentElapsed = Math.floor((now - state.startTime) / 1000);
+  const totalElapsed = state.totalElapsedTime + currentElapsed;
+  const calculatedRemaining = Math.max(0, state.phaseDuration - totalElapsed);
   
   // Only update if it's a reasonable value (Firebase listener will correct if needed)
-  if (calculatedRemaining >= 0 && calculatedRemaining <= state.initialRemainingTime) {
+  if (calculatedRemaining >= 0 && calculatedRemaining <= state.phaseDuration) {
     state.remainingTime = calculatedRemaining;
   }
   
@@ -376,7 +391,7 @@ function handlePhaseComplete() {
     state.cycleCount++;
     
     state.phase = 'break';
-    setRemainingTime(breakTime * 60);
+    setPhaseDuration(breakTime * 60);
     state.isInAccumulatedBreak = false;
     
     // Auto-start break
@@ -391,7 +406,7 @@ function handlePhaseComplete() {
       showNotification('Accumulated Break Complete!', 'Resuming focus.');
       
       state.phase = 'focus';
-      setRemainingTime(state.savedFocusTime || state.settings.focusTime * 60);
+      setPhaseDuration(state.savedFocusTime || state.settings.focusTime * 60);
       state.isInAccumulatedBreak = false;
       state.accumulatedBreakTime = 0; // All accumulated time was used
       state.savedFocusTime = null;
@@ -401,7 +416,7 @@ function handlePhaseComplete() {
       showNotification('Break Complete!', 'Time to focus.');
       
       state.phase = 'focus';
-      setRemainingTime(state.settings.focusTime * 60);
+      setPhaseDuration(state.settings.focusTime * 60);
       
       // Reset cycle count after long break (when cycleCount is a multiple of interval)
       if (state.cycleCount % state.settings.longBreakInterval === 0) {
@@ -436,7 +451,7 @@ function skipBreak() {
   
   // Move to next focus (cycleCount already incremented when entering break)
   state.phase = 'focus';
-  setRemainingTime(state.settings.focusTime * 60);
+  setPhaseDuration(state.settings.focusTime * 60);
   
   // skipBreak calls pauseTimer which marks us as authoritative
   writeStateToFirebase();
@@ -460,7 +475,7 @@ function takeAccumulatedBreak() {
   state.isInAccumulatedBreak = true;
   state.accumulatedBreakRemaining = state.accumulatedBreakTime;
   state.phase = 'break';
-  setRemainingTime(state.accumulatedBreakTime);
+  setPhaseDuration(state.accumulatedBreakTime);
   
   // takeAccumulatedBreak calls pauseTimer which marks us as authoritative
   writeStateToFirebase();
@@ -484,7 +499,7 @@ function resumeFocus() {
   // Resume focus with saved time
   state.isInAccumulatedBreak = false;
   state.phase = 'focus';
-  setRemainingTime(state.savedFocusTime || state.settings.focusTime * 60);
+  setPhaseDuration(state.savedFocusTime || state.settings.focusTime * 60);
   state.savedFocusTime = null;
   
   // resumeFocus calls pauseTimer which marks us as authoritative
@@ -504,7 +519,7 @@ function resetTimer() {
   pauseTimer();
   
   state.phase = 'focus';
-  setRemainingTime(state.settings.focusTime * 60);
+  setPhaseDuration(state.settings.focusTime * 60);
   state.cycleCount = 1;
   state.accumulatedBreakTime = 0;
   state.isInAccumulatedBreak = false;
@@ -529,20 +544,17 @@ function writeStateToFirebase() {
   try {
     const timerRef = database.ref('timer');
     
-    // CRITICAL FIX: When running, remainingTimeAtStart should be the initialRemainingTime
-    // (the time when we started/resumed), NOT the current remainingTime + elapsed.
-    let remainingTimeAtStart;
-    if (state.isRunning) {
-      remainingTimeAtStart = state.initialRemainingTime;
-    } else {
-      remainingTimeAtStart = state.remainingTime;
-    }
+    // CRITICAL FIX: Write phaseDuration and totalElapsedTime
+    // remainingTime is calculated as: phaseDuration - totalElapsedTime (when paused)
+    // or: phaseDuration - (totalElapsedTime + currentElapsed) (when running)
+    // We write the base values so all devices can calculate correctly
     
     const data = {
       phase: state.phase,
       isRunning: state.isRunning,
-      remainingTime: state.remainingTime,
-      remainingTimeAtStart: remainingTimeAtStart,
+      phaseDuration: state.phaseDuration, // Total duration for current phase
+      totalElapsedTime: state.totalElapsedTime, // Total elapsed across all cycles
+      remainingTime: state.remainingTime, // Current remaining (for paused state)
       // Use Firebase ServerValue.TIMESTAMP for accurate server time when starting
       startTime: state.isRunning ? firebase.database.ServerValue.TIMESTAMP : null,
       cycleCount: state.cycleCount,
