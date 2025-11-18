@@ -3,761 +3,922 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Multi-Device Pomodoro Timer</title>
+    <title>Flexible Pomodoro Timer</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Inter Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" rel="stylesheet">
     <style>
         body {
-            font-family: Arial, sans-serif;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            height: 100vh;
-            margin: 0;
-            background-color: #2c3e50;
-            color: white;
-            transition: background-color 0.5s;
+            font-family: 'Inter', sans-serif;
+            transition: background-color 0.5s ease;
         }
-        .timer-container {
-            text-align: center;
-            background: rgba(0, 0, 0, 0.2);
-            padding: 40px;
-            border-radius: 15px;
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
+        /* Color transitions for phases */
+        .focus-bg { background-color: #ef4444; } /* Red 500 */
+        .break-bg { background-color: #3b82f6; } /* Blue 500 */
+        .long-break-bg { background-color: #10b981; } /* Emerald 500 */
+        .flexible-break-bg { background-color: #f59e0b; } /* Amber 500 */
+        .paused-bg { background-color: #4b5563; } /* Gray 600 */
+        
+        .timer-display {
+            font-size: 8rem;
+            font-weight: 700;
+            line-height: 1;
+            letter-spacing: -0.05em;
         }
-        #status-message {
-            font-size: 2em;
-            margin-bottom: 20px;
+
+        .shadow-button {
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+            transition: transform 0.1s, box-shadow 0.1s;
         }
-        #timer {
-            font-size: 6em;
-            margin: 10px 0;
-            font-weight: bold;
+        .shadow-button:hover {
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
+            transform: translateY(-1px);
         }
-        .controls, .flexible-break-controls, .info-bar {
-            margin-top: 20px;
+        .shadow-button:active {
+            box-shadow: none;
+            transform: translateY(0);
         }
-        button {
-            padding: 10px 20px;
-            margin: 5px;
-            font-size: 1em;
-            cursor: pointer;
-            border: none;
-            border-radius: 5px;
-            background-color: #3498db;
-            color: white;
-            transition: background-color 0.3s;
-        }
-        button:hover {
-            background-color: #2980b9;
-        }
-        #btn-start-pause {
-            background-color: #2ecc71;
-        }
-        #btn-start-pause:hover {
-            background-color: #27ae60;
-        }
-        .info-bar {
-            display: flex;
-            justify-content: space-around;
-            width: 100%;
-            max-width: 400px;
-            margin-bottom: 10px;
-            font-size: 1.1em;
-        }
-        .info-bar span {
-            padding: 5px 10px;
-            background: rgba(255, 255, 255, 0.1);
-            border-radius: 5px;
-        }
-        #settings-modal {
-            position: fixed;
-            z-index: 1000;
+
+        /* Modal specific styles */
+        .modal {
+            display: none; 
+            position: fixed; 
+            z-index: 100;
             left: 0;
             top: 0;
             width: 100%;
             height: 100%;
             overflow: auto;
-            background-color: rgba(0,0,0,0.4);
-            display: none;
-            justify-content: center;
-            align-items: center;
+            background-color: rgba(0,0,0,0.6);
         }
-        .modal-content {
-            background-color: #34495e;
-            padding: 30px;
-            border-radius: 10px;
-            width: 90%;
-            max-width: 400px;
-            color: white;
-        }
-        .modal-content label {
-            display: block;
-            margin-top: 10px;
-            font-size: 1.1em;
-        }
-        .modal-content input {
-            width: calc(100% - 22px);
-            padding: 10px;
-            margin-top: 5px;
-            border-radius: 5px;
-            border: 1px solid #7f8c8d;
-            background-color: #2c3e50;
-            color: white;
-        }
-        .modal-footer {
-            margin-top: 20px;
-            text-align: right;
-        }
-        .error-message {
-            color: #e74c3c;
+
+        /* Notification Styling (for visibility) */
+        .notification-bar {
+            position: fixed;
+            top: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 1000;
+            padding: 8px 16px;
+            border-radius: 0 0 8px 8px;
             font-weight: bold;
-            margin-top: 10px;
+            color: white;
+            opacity: 0;
+            transition: opacity 0.3s ease-in-out;
         }
-        .id-display {
-            font-size: 0.8em;
-            margin-top: 10px;
+        .notification-show {
+            opacity: 1;
+        }
+
+        /* Responsive adjustments for timer */
+        @media (max-width: 640px) {
+            .timer-display {
+                font-size: 5rem;
+            }
         }
     </style>
-    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
 </head>
-<body>
+<body class="focus-bg text-white">
 
-    <div class="timer-container">
-        <div class="info-bar">
-            <span id="cycle-display">Cycle: 1/4</span>
-            <span id="accumulated-display">Accumulated Break: 0 min</span>
-        </div>
-        <div id="status-message">Loading...</div>
-        <div id="timer">00:00</div>
+    <!-- Notification Bar -->
+    <div id="notification-bar" class="notification-bar bg-red-600"></div>
 
-        <div class="controls">
-            <button id="btn-start-pause">START</button>
-            <button id="btn-skip">SKIP</button>
-            <button id="btn-reset">RESET</button>
+    <div class="min-h-screen w-full flex flex-col items-center justify-center p-4">
+        
+        <!-- Info Bar -->
+        <div id="info-bar" class="w-full max-w-lg mb-8 text-center text-sm font-medium">
+            <p id="user-id">Your ID (for sync): Loading...</p>
+            <p id="connection-status" class="text-yellow-300">Connecting to Firebase...</p>
         </div>
 
-        <div class="flexible-break-controls">
-            <button id="btn-take-break" style="display: none;">TAKE ACCUMULATED BREAK</button>
-            <button id="btn-return-focus" style="display: none;">RETURN TO FOCUS</button>
-        </div>
-
-        <div class="controls">
-            <button id="btn-settings">SETTINGS</button>
-        </div>
-
-        <div class="id-display">
-            <span id="connection-status">Connecting to Firebase...</span>
-        </div>
-
-        <div class="error-message" id="firebase-error" style="display: none;"></div>
-    </div>
-
-    <div id="settings-modal">
-        <div class="modal-content">
-            <h2>Settings</h2>
-            <label for="focus-time">Focus Time (minutes):</label>
-            <input type="number" id="focus-time" value="50">
-
-            <label for="short-break-time">Short Break Time (minutes):</label>
-            <input type="number" id="short-break-time" value="10">
-
-            <label for="long-break-time">Long Break Time (minutes):</label>
-            <input type="number" id="long-break-time" value="30">
-
-            <label for="cycle-count">Cycles before Long Break:</label>
-            <input type="number" id="cycle-count" value="4">
-
-            <div class="modal-footer">
-                <button id="btn-save-settings">Save</button>
-                <button id="btn-close-settings">Close</button>
+        <!-- Timer Card -->
+        <div class="bg-white/10 backdrop-blur-sm p-6 sm:p-10 rounded-2xl shadow-2xl w-full max-w-lg">
+            
+            <div class="text-center mb-6">
+                <h2 id="phase-title" class="text-3xl font-bold">Focus</h2>
+                <p id="cycle-indicator" class="text-lg opacity-80">Cycle 1/4</p>
             </div>
+
+            <div id="timer" class="timer-display text-center mb-6">50:00</div>
+            
+            <div id="status-message" class="text-center mb-6 text-xl font-medium min-h-6">Ready</div>
+
+            <!-- Main Controls (Start/Pause/Reset) -->
+            <div class="flex justify-center space-x-4 mb-6">
+                <button id="main-action-btn" class="shadow-button px-8 py-3 bg-white text-gray-900 rounded-full font-bold text-lg hover:bg-gray-200">
+                    START
+                </button>
+                <button id="reset-btn" class="shadow-button px-6 py-3 bg-red-600 hover:bg-red-700 rounded-full font-bold text-lg">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                </button>
+            </div>
+
+            <!-- Skip and Flexible Break Controls -->
+            <div class="grid grid-cols-2 gap-4">
+                
+                <button id="skip-focus-btn" class="shadow-button px-4 py-2 bg-yellow-600 hover:bg-yellow-700 rounded-lg font-semibold text-sm">
+                    SKIP FOCUS
+                </button>
+                
+                <button id="skip-break-btn" class="shadow-button px-4 py-2 bg-yellow-600 hover:bg-yellow-700 rounded-lg font-semibold text-sm">
+                    SKIP BREAK
+                </button>
+
+                <div id="flexible-break-controls" class="col-span-2 space-y-2 hidden">
+                    <p id="accumulated-time-display" class="text-center text-lg font-semibold mt-2"></p>
+                    <button id="take-break-btn" class="shadow-button w-full px-4 py-2 bg-green-600 hover:bg-green-700 rounded-lg font-semibold text-base">
+                        TAKE ACCUMULATED BREAK
+                    </button>
+                    <button id="return-to-focus-btn" class="shadow-button w-full px-4 py-2 bg-indigo-600 hover:bg-indigo-700 rounded-lg font-semibold text-base hidden">
+                        RETURN TO FOCUS (Save time)
+                    </button>
+                </div>
+            </div>
+
+        </div>
+        
+        <!-- Footer Controls -->
+        <div class="mt-8 flex space-x-4">
+            <button id="settings-btn" class="shadow-button flex items-center px-4 py-2 bg-gray-700 hover:bg-gray-800 rounded-full text-sm font-medium">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-1" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.3-.873-2.863.67-2.035 2.035.127.207.093.45.093.45s-.167.31-.093.45c-.828 1.365.738 2.938 2.035 2.035.334-.222.463-.332.612-.132.38 1.56 2.6 1.56 2.98 0 .149-.2.278-.09.612.132 1.3.873 2.863-.67 2.035-2.035-.127-.207-.093-.45-.093-.45s.167-.31.093-.45c-.828-1.365.738-2.938 2.035-2.035.334-.222.463.332.612-.132zM10 7a3 3 0 100 6 3 3 0 000-6z" clip-rule="evenodd" />
+                </svg>
+                Settings
+            </button>
         </div>
     </div>
 
-    <script>
-        // ====================================================================
-        // 🚨 PASO IMPORTANTE: REEMPLAZA ESTO CON TUS CLAVES DE CONFIGURACIÓN DE FIREBASE 🚨
-        // ====================================================================
+    <!-- Settings Modal -->
+    <div id="settings-modal" class="modal">
+        <div class="bg-gray-900 rounded-lg p-8 m-auto mt-20 max-w-md shadow-2xl text-white">
+            <div class="flex justify-between items-center mb-6 border-b border-gray-700 pb-3">
+                <h3 class="text-2xl font-bold">Timer Settings</h3>
+                <button id="close-modal-btn" class="text-gray-400 hover:text-white">&times;</button>
+            </div>
+            
+            <div class="space-y-4">
+                <div>
+                    <label for="focus-time" class="block text-sm font-medium mb-1">Focus Time (minutes)</label>
+                    <input type="number" id="focus-time" class="w-full p-2 rounded-md bg-gray-800 border border-gray-700 text-white focus:outline-none focus:ring-2 focus:ring-red-500" value="50">
+                </div>
+                <div>
+                    <label for="short-break-time" class="block text-sm font-medium mb-1">Short Break Time (minutes)</label>
+                    <input type="number" id="short-break-time" class="w-full p-2 rounded-md bg-gray-800 border border-gray-700 text-white focus:outline-none focus:ring-2 focus:ring-blue-500" value="10">
+                </div>
+                <div>
+                    <label for="long-break-time" class="block text-sm font-medium mb-1">Long Break Time (minutes)</label>
+                    <input type="number" id="long-break-time" class="w-full p-2 rounded-md bg-gray-800 border border-gray-700 text-white focus:outline-none focus:ring-2 focus:ring-green-500" value="30">
+                </div>
+                <div>
+                    <label for="cycle-count" class="block text-sm font-medium mb-1">Cycles before Long Break</label>
+                    <input type="number" id="cycle-count" class="w-full p-2 rounded-md bg-gray-800 border border-gray-700 text-white focus:outline-none focus:ring-2 focus:ring-green-500" value="4">
+                </div>
+            </div>
+
+            <button id="save-settings-btn" class="mt-8 w-full py-2 bg-red-500 hover:bg-red-600 rounded-md font-bold text-lg shadow-button">Save Settings</button>
+        </div>
+    </div>
+
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, onSnapshot, setDoc, updateDoc, getDoc, serverTimestamp, FieldValue, Timestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        
+        // Configuration and Initialization
+        setLogLevel('debug'); // Enable Firestore logging for debugging
+        
+        // --- FIREBASE CONFIGURATION ---
+        // INSERTA AQUÍ LAS CREDENCIALES DE TU PROYECTO DE FIREBASE
+        // ESTA CONFIGURACIÓN DEBE SER LA DE TU PROYECTO PARA QUE FUNCIONE EN GITHUB PAGES.
         const firebaseConfig = {
-
-  apiKey: "AIzaSyB91A11J55B1NYAzEDYpMst1zli6Z-uuj4",
-
-  authDomain: "pomodorosync-7f342.firebaseapp.com",
-
-  databaseURL: "https://pomodorosync-7f342-default-rtdb.firebaseio.com",
-
-  projectId: "pomodorosync-7f342",
-
-  storageBucket: "pomodorosync-7f342.firebasestorage.app",
-
-  messagingSenderId: "523175871116",
-
-  appId: "1:523175871116:web:5c43cb66e4e01db215b1a9"
-
-};
-        // ====================================================================
-
-        // Inicializar Firebase
-        let db;
-        try {
-            const app = firebase.initializeApp(firebaseConfig);
-            db = app.database();
-            document.getElementById('connection-status').textContent = 'Your ID (for sync): Connected';
-        } catch (error) {
-            document.getElementById('connection-status').textContent = 'Your ID (for sync): Connection Failed';
-            document.getElementById('firebase-error').style.display = 'block';
-            document.getElementById('firebase-error').textContent = `Error: Firebase Init Failed. Check Console. (${error.message})`;
-            console.error("Firebase Initialization Error: ", error);
-            // Si Firebase falla, detenemos la ejecución para evitar más errores.
-            document.getElementById('btn-start-pause').disabled = true;
-            document.getElementById('status-message').textContent = 'Initialization Failed';
-            document.getElementById('timer').textContent = 'ERR';
-            throw new Error("Initialization Failed"); // Detiene el script
-        }
-// Referencia al tiempo del servidor de Firebase
-const serverTimeRef = db.ref('.info/serverTimeOffset');
-let serverTimeOffset = 0;
-
-serverTimeRef.on('value', (snap) => {
-    serverTimeOffset = snap.val() || 0;
-});
-
-/**
- * Obtiene el tiempo actual, corrigiendo la diferencia con el servidor de Firebase.
- */
-function getServerTime() {
-    return Date.now() + serverTimeOffset;
-}  
-        // Referencia a la base de datos
-        const dbRef = db.ref('pomodoroState');
-        const dbSettingsRef = db.ref('pomodoroSettings');
-
-        // Estado local (sólo para la interfaz y el intervalo)
-        let localState = {
-            timerInterval: null,
-            isPaused: true,
-            currentPhase: 'focus', // focus, break, longbreak, accumulated_break
-            remainingTime: 0,
-            accumulatedBreakTime: 0, // seconds
-            currentCycle: 1,
-            timePausedDuringFocus: 0 // Usado para el cálculo de reanudación
+            apiKey: "AIzaSyB91A11J55B1NYAzEDYpMst1zli6Z-uuj4",
+            authDomain: "pomodorosync-7f342.firebaseapp.com",
+            databaseURL: "https://pomodorosync-7f342-default-rtdb.firebaseio.com",
+            projectId: "pomodorosync-7f342",
+            storageBucket: "pomodorosync-7f342.firebasestorage.app",
+            messagingSenderId: "523175871116",
+            appId: "1:523175871116:web:5c43cb66e4e01db215b1a9"
         };
         
-        // Settings locales
+        // Usamos un ID de aplicación fijo para la colección de Firestore para la sincronización.
+        const appId = 'pomodoro-sync-public-state'; 
+        
+        // --- END FIREBASE CONFIGURATION ---
+
+        let db, auth;
+        let userId = 'loading';
+        let isAuthReady = false;
+        let intervalId = null;
+        let currentPhaseDuration; // Stores the current phase's total duration in seconds.
+
+        // Default Settings (in minutes)
         let settings = {
-            focusTime: 50 * 60,
-            shortBreakTime: 10 * 60,
-            longBreakTime: 30 * 60,
-            cycleCount: 4
+            focusTime: 50,
+            shortBreakTime: 10,
+            longBreakTime: 30,
+            cycleCount: 4 
         };
 
-        // DOM Elements
-        const timerDisplay = document.getElementById('timer');
-        const statusMessage = document.getElementById('status-message');
-        const startPauseBtn = document.getElementById('btn-start-pause');
-        const skipBtn = document.getElementById('btn-skip');
-        const takeBreakBtn = document.getElementById('btn-take-break');
-        const returnFocusBtn = document.getElementById('btn-return-focus');
-        const resetBtn = document.getElementById('btn-reset');
-        const cycleDisplay = document.getElementById('cycle-display');
-        const accumulatedDisplay = document.getElementById('accumulated-display');
+        // UI Element References
+        const timerEl = document.getElementById('timer');
+        const phaseTitleEl = document.getElementById('phase-title');
+        const cycleIndicatorEl = document.getElementById('cycle-indicator');
+        const statusMessageEl = document.getElementById('status-message');
+        const mainActionBtn = document.getElementById('main-action-btn');
+        const resetBtn = document.getElementById('reset-btn');
+        const settingsBtn = document.getElementById('settings-btn');
         const settingsModal = document.getElementById('settings-modal');
+        const closeModalBtn = document.getElementById('close-modal-btn');
+        const saveSettingsBtn = document.getElementById('save-settings-btn');
+        const userIdEl = document.getElementById('user-id');
+        const connectionStatusEl = document.getElementById('connection-status');
+        const skipFocusBtn = document.getElementById('skip-focus-btn');
+        const skipBreakBtn = document.getElementById('skip-break-btn');
+        const takeBreakBtn = document.getElementById('take-break-btn');
+        const returnToFocusBtn = document.getElementById('return-to-focus-btn');
+        const flexBreakControlsEl = document.getElementById('flexible-break-controls');
+        const accumulatedTimeDisplayEl = document.getElementById('accumulated-time-display');
 
-        // Sonido
-        const bell = new Audio('https://commondatastorage.googleapis.com/codeskulptor-assets/week7-bounce.m4a'); // Sonido simple
-
-        // ====================================================================
-        // LÓGICA DE ESTADO Y SINCRONIZACIÓN
-        // ====================================================================
-
-        /**
-         * Inicializa la configuración de la base de datos o la recupera.
-         */
-        dbSettingsRef.once('value', snapshot => {
-            if (snapshot.exists()) {
-                const fetchedSettings = snapshot.val();
-                settings.focusTime = fetchedSettings.focusTime * 60;
-                settings.shortBreakTime = fetchedSettings.shortBreakTime * 60;
-                settings.longBreakTime = fetchedSettings.longBreakTime * 60;
-                settings.cycleCount = fetchedSettings.cycleCount;
-            } else {
-                dbSettingsRef.set({
-                    focusTime: settings.focusTime / 60,
-                    shortBreakTime: settings.shortBreakTime / 60,
-                    longBreakTime: settings.longBreakTime / 60,
-                    cycleCount: settings.cycleCount
-                });
-            }
-            // Después de cargar settings, podemos cargar el estado principal
-            loadInitialState();
-        });
-
-
-        /**
-         * Maneja los cambios de estado de Firebase y actualiza la interfaz.
-         * Esta es la clave de la sincronización.
-         */
-        dbRef.on('value', (snapshot) => {
-            const serverState = snapshot.val();
-            if (!serverState) return;
-
-            // Actualizar estado local con los datos del servidor
-            localState.isPaused = serverState.isPaused;
-            localState.currentPhase = serverState.currentPhase;
-            localState.accumulatedBreakTime = serverState.accumulatedBreakTime;
-            localState.currentCycle = serverState.currentCycle;
-            
-            // Si está pausado, simplemente usamos el tiempo de pausa guardado
-            if (serverState.isPaused) {
-                localState.remainingTime = serverState.remainingTimeAtPause;
-} else {
-    // Si está corriendo, calculamos el tiempo restante usando el tiempo del SERVIDOR
-    const elapsedSeconds = (getServerTime() - serverState.startTime) / 1000;
-    localState.remainingTime = Math.max(0, serverState.totalTimeForPhase - elapsedSeconds);
-}
-            updateUI();
-            
-            // Sincronizar el temporizador local
-            clearInterval(localState.timerInterval);
-            if (!localState.isPaused) {
-                localState.timerInterval = setInterval(tick, 1000);
-            }
-        });
-
-
-        /**
-         * Carga el estado inicial si la base de datos está vacía.
-         */
-        function loadInitialState() {
-             dbRef.once('value', snapshot => {
-                if (!snapshot.exists()) {
-                    // Inicializar estado de la BD
-                    const initialTotalTime = settings.focusTime;
-                    dbRef.set({
-                        isPaused: true,
-                        currentPhase: 'focus',
-                        remainingTimeAtPause: initialTotalTime, // En segundos
-                        accumulatedBreakTime: 0, // En segundos
-                        currentCycle: 1,
-                        startTime: Date.now(),
-                        totalTimeForPhase: initialTotalTime
-                    });
-                }
-            });
-        }
-
-
-        /**
-         * Envía los cambios de estado del temporizador a Firebase (llamado solo al hacer click).
-         */
-        function updateServerState(updates) {
-            // Unificamos las actualizaciones con el estado actual del servidor para asegurar
-            // que los datos clave (como totalTimeForPhase) se mantengan si no se especifican.
-             dbRef.once('value', snapshot => {
-                const serverState = snapshot.val() || {};
-                const newState = { ...serverState, ...updates };
-                dbRef.set(newState);
-            });
-        }
-
-        // ====================================================================
-        // LÓGICA DE TEMPORIZADOR
-        // ====================================================================
-
-        /**
-         * Función que se ejecuta cada segundo localmente.
-         * Cuando llega a 0, llama a endPhaseAndAutoStart.
-         */
-        function tick() {
-            if (localState.isPaused) return;
-
-            localState.remainingTime--;
-
-            if (localState.remainingTime <= 0) {
-                clearInterval(localState.timerInterval);
-                bell.play();
-                // Llamamos a la función de cambio de fase, que actualizará el servidor
-                endPhaseAndAutoStart();
-            }
-            updateUI();
-        }
-
-        /**
-         * Lógica de cambio de fase (Focus -> Break -> Focus...).
-         * Actualiza el servidor para sincronizar a todos.
-         */
-        function endPhaseAndAutoStart() {
-            let nextPhase, totalTime, nextCycle = localState.currentCycle;
-            
-            // 1. Fase actual terminó. Calcular la siguiente.
-            switch (localState.currentPhase) {
-                case 'focus':
-                    nextPhase = (nextCycle % settings.cycleCount === 0) ? 'longbreak' : 'break';
-                    totalTime = (nextPhase === 'longbreak') ? settings.longBreakTime : settings.shortBreakTime;
-                    // El ciclo se incrementa si estamos a punto de empezar un break.
-                    nextCycle++; 
-                    break;
-                case 'break':
-                case 'longbreak':
-                    nextPhase = 'focus';
-                    totalTime = settings.focusTime;
-                    // El ciclo se ajustó en el paso anterior.
-                    break;
-                case 'accumulated_break':
-                    // El tiempo restante no se acumula aquí. Volvemos al focus.
-                    nextPhase = 'focus';
-                    totalTime = settings.focusTime;
-                    // Mantenemos el ciclo
-                    break;
-            }
-
-            // 2. Aplicar auto-inicio al servidor
-            updateServerState({
-                isPaused: false, // Auto-Start
-                currentPhase: nextPhase,
-                startTime: Date.now(),
-                totalTimeForPhase: totalTime,
-                accumulatedBreakTime: localState.accumulatedBreakTime,
-                currentCycle: nextPhase === 'focus' ? nextCycle - 1 : nextCycle, // Para mostrar el ciclo correcto
-                remainingTimeAtPause: 0 // No aplica, pero lo reseteamos
-            });
-        }
-
-        // ====================================================================
-        // FUNCIONALIDADES PRINCIPALES (START/PAUSE/SKIP/RESET)
-        // ====================================================================
-
-        /**
-         * Maneja el click en Start/Pause.
-         */
-        startPauseBtn.onclick = () => {
-            if (localState.isPaused) {
-// START/RESUME
-        const totalTimeForPhase = getTotalTimeForCurrentPhase();
-        
-        // 1. Calcular el tiempo que ya transcurrió antes de la pausa (en milisegundos).
-        // (Tiempo Total - Tiempo Restante) * 1000
-        // localState.remainingTime es el tiempo restante al pausar (en segundos).
-        const timeElapsedMs = (totalTimeForPhase - localState.remainingTime) * 1000;
-
-        // 2. Registrar el 'startTime' ajustado.
-        // El nuevo startTime es la hora actual del servidor MENOS el tiempo transcurrido,
-        // para que la reanudación parezca que el timer nunca se detuvo.
-        
-        updateServerState({
-            isPaused: false,
-            // Esto se resuelve como: (Hora Actual del Servidor) - (Tiempo ya Transcurrido)
-            startTime: firebase.database.ServerValue.TIMESTAMP - timeElapsedMs,
-            totalTimeForPhase: totalTimeForPhase,
-            remainingTimeAtPause: 0 // Resetear, ya que no estamos pausados
-        });
-    } else {
-        // PAUSE
-        updateServerState({
-            isPaused: true,
-            remainingTimeAtPause: localState.remainingTime // Esto guarda el tiempo restante
-        });
-    }
-}
-                // PAUSE
-                updateServerState({
-                    isPaused: true,
-                    remainingTimeAtPause: localState.remainingTime // Guardamos el tiempo restante
-                });
-            }
+        // Initial State (Synced)
+        const initialState = {
+            status: 'stopped', // 'running', 'paused', 'stopped'
+            phase: 'focus', // 'focus', 'break', 'longBreak', 'flexibleBreak'
+            startTime: null, // Firestore server timestamp when started/resumed
+            remainingSecondsAtPause: settings.focusTime * 60, // Seconds left when paused
+            currentCycle: 1,
+            accumulatedBreakSeconds: 0, // For flexible break logic
+            focusTimeRemainingBeforeFlex: 0, // For returning to Focus
         };
+        let timerState = { ...initialState };
+
+
+        // --- FIREBASE INITIALIZATION AND AUTHENTICATION ---
+        async function initFirebase() {
+            try {
+                // Ensure config exists for external use
+                if (!firebaseConfig.apiKey) {
+                    throw new Error("Firebase configuration is missing or invalid.");
+                }
+
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                
+                // Usamos signInAnonymously()
+                await signInAnonymously(auth);
+                
+                // Get the user ID (UID from the authenticated user)
+                userId = auth.currentUser.uid;
+                userIdEl.textContent = `Your ID (for sync): ${userId}`;
+                connectionStatusEl.textContent = 'Connected!';
+                connectionStatusEl.classList.remove('text-yellow-300', 'text-red-500');
+                connectionStatusEl.classList.add('text-green-400');
+                isAuthReady = true;
+
+                // Start listening to the state and settings
+                setupListeners();
+
+            } catch (error) {
+                console.error("Firebase Init Failed:", error);
+                userIdEl.textContent = `Your ID: Connection Failed`;
+                connectionStatusEl.textContent = `Error: ${error.message}`;
+                connectionStatusEl.classList.remove('text-yellow-300', 'text-green-400');
+                connectionStatusEl.classList.add('text-red-500');
+                sendNotification('Error de conexión', 'No se pudo conectar a Firebase. Revisa tus credenciales.');
+            }
+        }
+        
+        // --- SYNCHRONIZATION AND LISTENERS ---
+        function setupListeners() {
+            if (!isAuthReady) return;
+
+            // La colección publica es artifacts/{appId}/public/data/{collectionName}
+            const stateRef = doc(db, 'artifacts', appId, 'public/data', 'pomodoroState');
+            const settingsRef = doc(db, 'artifacts', appId, 'public/data', 'pomodoroSettings');
+
+            // 1. Settings Listener
+            onSnapshot(settingsRef, (docSnap) => {
+                if (docSnap.exists()) {
+                    const newSettings = docSnap.data();
+                    // Update local settings (converting minutes to seconds for times)
+                    settings.focusTime = newSettings.focusTime;
+                    settings.shortBreakTime = newSettings.shortBreakTime;
+                    settings.longBreakTime = newSettings.longBreakTime;
+                    settings.cycleCount = newSettings.cycleCount;
+                    
+                    // Update modal inputs
+                    document.getElementById('focus-time').value = newSettings.focusTime;
+                    document.getElementById('short-break-time').value = newSettings.shortBreakTime;
+                    document.getElementById('long-break-time').value = newSettings.longBreakTime;
+                    document.getElementById('cycle-count').value = newSettings.cycleCount;
+                    
+                    // Convert to seconds for internal use (MUST be done AFTER updating settings display)
+                    settings.focusTime *= 60;
+                    settings.shortBreakTime *= 60;
+                    settings.longBreakTime *= 60;
+
+                    // If timer is stopped, update the display time immediately based on new settings
+                    if (timerState.status === 'stopped') {
+                        timerState.remainingSecondsAtPause = settings.focusTime;
+                        updateUI();
+                    }
+
+                } else {
+                    // Initialize settings if they don't exist (using defaults, converted to minutes for storage)
+                    setDoc(settingsRef, {
+                        focusTime: 50,
+                        shortBreakTime: 10,
+                        longBreakTime: 30,
+                        cycleCount: 4
+                    }, { merge: true });
+                }
+            }, (error) => console.error("Error listening to settings:", error));
+
+            // 2. State Listener (The core sync engine)
+            onSnapshot(stateRef, (docSnap) => {
+                if (docSnap.exists()) {
+                    const newState = docSnap.data();
+                    
+                    // Check if a reset or major state change occurred
+                    if (newState.status === 'stopped' && timerState.status !== 'stopped') {
+                        clearInterval(intervalId);
+                        intervalId = null;
+                        Object.assign(timerState, newState);
+                        updateUI();
+                        statusMessageEl.textContent = 'Timer reset.';
+                        return;
+                    }
+                    
+                    // Apply new state and trigger UI update
+                    Object.assign(timerState, newState);
+                    
+                    // If running state changed or phase changed, restart the loop
+                    if (timerState.status === 'running' && !intervalId) {
+                        startLocalTimerLoop();
+                    } else if (timerState.status !== 'running' && intervalId) {
+                        clearInterval(intervalId);
+                        intervalId = null;
+                    }
+                    
+                    // Immediate UI refresh based on new state
+                    updateUI();
+                } else {
+                    // Initialize the state if it doesn't exist
+                    setDoc(stateRef, initialState, { merge: true });
+                }
+            }, (error) => console.error("Error listening to state:", error));
+        }
+
+        // --- TIME CALCULATION AND UI UPDATE ---
 
         /**
-         * Obtiene el tiempo total (en segundos) que debería tener la fase actual.
+         * Calculates the remaining seconds for the current phase based on server time.
+         * @param {number} serverTime - The current server time in milliseconds.
+         * @returns {number} The remaining seconds.
          */
-        function getTotalTimeForCurrentPhase() {
-            switch (localState.currentPhase) {
+        function calculateRemainingTime(serverTime) {
+            if (timerState.status !== 'running' || !timerState.startTime) {
+                // If paused or stopped, use the stored value
+                return timerState.remainingSecondsAtPause;
+            }
+
+            // Get the duration for the current phase (in seconds)
+            let phaseDuration = getDurationForPhase(timerState.phase);
+            currentPhaseDuration = phaseDuration;
+            
+            // Calculate time elapsed since the timer started/resumed
+            // Note: timerState.startTime is a Firebase Timestamp object, use .toMillis()
+            const timeElapsedMillis = serverTime - timerState.startTime.toMillis();
+            const timeElapsedSeconds = Math.floor(timeElapsedMillis / 1000);
+
+            // Time left is the total duration MINUS time elapsed
+            const timeLeft = phaseDuration - timeElapsedSeconds;
+            
+            return Math.max(0, timeLeft);
+        }
+
+        function getDurationForPhase(phase) {
+            switch (phase) {
                 case 'focus':
-                    return settings.focusTime;
+                    // If coming back from flex break, use the remaining time saved
+                    return timerState.focusTimeRemainingBeforeFlex || settings.focusTime;
                 case 'break':
+                    // Check for long break
+                    if (timerState.currentCycle > settings.cycleCount) {
+                        return settings.longBreakTime;
+                    }
                     return settings.shortBreakTime;
-                case 'longbreak':
+                case 'longBreak':
                     return settings.longBreakTime;
-                case 'accumulated_break':
-                    // Durante un break acumulado, el tiempo total es la cantidad que estamos tomando.
-                    // Para la reanudación del focus, usamos el tiempo restante del focus guardado.
-                    return localState.remainingTime; 
+                case 'flexibleBreak':
+                    return timerState.accumulatedBreakSeconds;
                 default:
                     return settings.focusTime;
             }
         }
+
+        /**
+         * Runs every second locally to update the UI without hitting Firestore.
+         */
+        async function updateUI() {
+            // Get current server time for accurate calculation (via a quick fetch)
+            const serverTimeRef = doc(db, 'artifacts', appId, 'public/data', 'serverTime');
+            let serverTime = Date.now(); // Fallback to local clock
+            
+            // Solo intentar obtener la hora del servidor si Firebase se inicializó correctamente
+            if (isAuthReady) {
+                try {
+                    const docSnap = await getDoc(serverTimeRef);
+                    if (docSnap.exists() && docSnap.data().timestamp) {
+                        serverTime = docSnap.data().timestamp.toMillis();
+                    } else {
+                        // Force a write of server timestamp for next time
+                        await setDoc(serverTimeRef, { timestamp: serverTimestamp() }, { merge: true });
+                    }
+                } catch(e) {
+                    console.warn("Could not fetch server time, relying on local clock.", e);
+                }
+            }
+
+
+            const remainingSeconds = calculateRemainingTime(serverTime);
+            
+            // Format time
+            const minutes = String(Math.floor(remainingSeconds / 60)).padStart(2, '0');
+            const seconds = String(remainingSeconds % 60).padStart(2, '0');
+            timerEl.textContent = `${minutes}:${seconds}`;
+
+            // Phase and Cycle UI update
+            let phaseDisplay = timerState.phase.charAt(0).toUpperCase() + timerState.phase.slice(1);
+            if (timerState.phase === 'break' && timerState.currentCycle > settings.cycleCount) {
+                 phaseDisplay = 'Long Break';
+            }
+            if (timerState.phase === 'flexibleBreak') {
+                phaseDisplay = 'Flexible Break';
+            }
+            phaseTitleEl.textContent = phaseDisplay;
+            document.body.className = `min-h-screen ${timerState.phase}-bg text-white`;
+
+            let cycleText = `Cycle ${timerState.currentCycle}/${settings.cycleCount}`;
+            if (timerState.phase === 'longBreak') cycleText = 'Long Break';
+            if (timerState.phase !== 'focus' && timerState.phase !== 'break') cycleText = '';
+            cycleIndicatorEl.textContent = cycleText;
+
+            // Main Button/Status update
+            if (timerState.status === 'running') {
+                mainActionBtn.textContent = 'PAUSE';
+                mainActionBtn.classList.remove('bg-green-500', 'bg-white');
+                mainActionBtn.classList.add('bg-yellow-500', 'text-gray-900');
+                statusMessageEl.textContent = timerState.phase === 'focus' ? 'Time to work!' : 'Time to rest.';
+            } else if (timerState.status === 'paused') {
+                mainActionBtn.textContent = 'CONTINUE';
+                mainActionBtn.classList.remove('bg-yellow-500', 'bg-white');
+                mainActionBtn.classList.add('bg-green-500', 'text-white');
+                statusMessageEl.textContent = 'Paused...';
+            } else {
+                mainActionBtn.textContent = 'START';
+                mainActionBtn.classList.remove('bg-yellow-500', 'bg-green-500');
+                mainActionBtn.classList.add('bg-white', 'text-gray-900');
+                statusMessageEl.textContent = 'Ready';
+            }
+            
+            updateFlexibleBreakUI();
+
+            // Check for end of timer and auto-transition/loop
+            if (timerState.status === 'running' && remainingSeconds <= 0) {
+                clearInterval(intervalId);
+                intervalId = null;
+                await handleTimerEnd();
+            }
+        }
+
+        function startLocalTimerLoop() {
+            if (intervalId) return;
+            // Update UI immediately, then every second
+            updateUI();
+            intervalId = setInterval(updateUI, 1000);
+        }
+
+        // --- PHASE TRANSITION LOGIC ---
         
         /**
-         * Maneja el click en Skip.
+         * Calculates the next phase and updates the state.
+         * This function should only be called by a single device when the timer hits 0.
          */
-        skipBtn.onclick = () => {
-            if (localState.currentPhase === 'focus') {
-                // SKIP FOCUS: Pasa al siguiente break.
-                // El tiempo de break NO se acumula en Skip Focus.
-                bell.play();
-                let nextPhase = (localState.currentCycle % settings.cycleCount === 0) ? 'longbreak' : 'break';
-                let totalTime = (nextPhase === 'longbreak') ? settings.longBreakTime : settings.shortBreakTime;
-                let nextCycle = localState.currentCycle + 1;
+        async function handleTimerEnd() {
+            let newPhase = timerState.phase;
+            let newCycle = timerState.currentCycle;
 
-                updateServerState({
-                    isPaused: false, // Auto-start
-                    currentPhase: nextPhase,
-                    startTime: Date.now(),
-                    totalTimeForPhase: totalTime,
-                    currentCycle: nextCycle
+            // Play sound for phase change
+            playSound();
+
+            // Send notification
+            sendNotification('Timer finished!', `Transitioning to ${newPhase}.`);
+
+            if (timerState.phase === 'focus') {
+                // Focus -> Break (or Long Break)
+                if (timerState.currentCycle >= settings.cycleCount) {
+                    newPhase = 'longBreak';
+                    newCycle = 1; // Reset cycle counter for next set of pomodoros
+                } else {
+                    newPhase = 'break';
+                    newCycle = timerState.currentCycle + 1;
+                }
+            } else if (timerState.phase === 'break' || timerState.phase === 'longBreak') {
+                // Break -> Focus
+                newPhase = 'focus';
+            } else if (timerState.phase === 'flexibleBreak') {
+                 // Flexible Break -> Focus (Automatically returns to focus)
+                newPhase = 'focus';
+                timerState.focusTimeRemainingBeforeFlex = 0; // Clear the saved remaining time
+            } else {
+                // Should not happen, default to Focus
+                newPhase = 'focus';
+            }
+            
+            const newDuration = getDurationForPhase(newPhase);
+
+            // Auto-start next phase
+            await updateStateInFirestore({
+                status: 'running',
+                phase: newPhase,
+                currentCycle: newCycle,
+                startTime: serverTimestamp(),
+                remainingSecondsAtPause: newDuration,
+                accumulatedBreakSeconds: timerState.accumulatedBreakSeconds, // Preserve accumulated breaks
+                focusTimeRemainingBeforeFlex: 0, // Reset this after returning
+            });
+        }
+
+
+        // --- FIREBASE STATE MANAGEMENT ---
+
+        /**
+         * Updates the global timer state in Firestore.
+         * @param {object} updates - Object containing state properties to update.
+         */
+        async function updateStateInFirestore(updates) {
+            if (!isAuthReady) {
+                 console.error("Firestore not ready. Cannot update state.");
+                 sendNotification('Error', 'No se puede conectar a la base de datos para guardar el estado.');
+                 return;
+            }
+            // Usa el appId fijo para la colección pública
+            const stateRef = doc(db, 'artifacts', appId, 'public/data', 'pomodoroState');
+            try {
+                // Add userId to updates for auditing (optional)
+                updates.lastUpdatedBy = userId; 
+                await updateDoc(stateRef, updates);
+                // Note: The UI update will happen automatically via the onSnapshot listener.
+            } catch (error) {
+                console.error("Error updating Firestore state:", error);
+                sendNotification('Error', 'Fallo al guardar el estado: ' + error.message);
+            }
+        }
+
+        // --- CONTROL BUTTON HANDLERS ---
+        
+        mainActionBtn.onclick = async () => {
+             if (!isAuthReady) {
+                sendNotification('Error', 'La conexión a la base de datos falló. Revisar la consola y la configuración.');
+                return;
+            }
+
+            if (timerState.status === 'running') {
+                // PAUSE
+                clearInterval(intervalId);
+                intervalId = null;
+                const remaining = calculateRemainingTime(Date.now());
+                await updateStateInFirestore({
+                    status: 'paused',
+                    startTime: null,
+                    remainingSecondsAtPause: remaining,
                 });
             } else {
-                // SKIP BREAK / LONG BREAK: Acumula el tiempo restante si es un break (normal o acumulado) y pasa a Focus.
-                let accumulated = 0;
-                let accumulatedTime = localState.accumulatedBreakTime;
+                // START / CONTINUE 
+                const duration = getDurationForPhase(timerState.phase);
+                let timeToStartFrom = timerState.remainingSecondsAtPause;
+                
+                // If starting from stopped or time is zero, use the full duration
+                if (timerState.status === 'stopped' || timerState.remainingSecondsAtPause <= 0) {
+                    timeToStartFrom = duration;
+                }
+                
+                await updateStateInFirestore({
+                    status: 'running',
+                    startTime: serverTimestamp(), // The moment the server registers the start command
+                    remainingSecondsAtPause: timeToStartFrom, // The total time in seconds of the current phase
+                });
+                
+                startLocalTimerLoop(); // Immediately start local loop while waiting for sync
+            }
+        };
 
-                if (localState.currentPhase === 'break' || localState.currentPhase === 'longbreak') {
-                    // Si se salta un break normal o largo, el tiempo se acumula.
-                    accumulated = Math.ceil(localState.remainingTime);
-                    accumulatedTime += accumulated;
-                } else if (localState.currentPhase === 'accumulated_break') {
-                    // Si se salta un break acumulado, el tiempo restante VUELVE a la acumulación.
-                    accumulated = Math.ceil(localState.remainingTime);
-                    accumulatedTime = localState.timePausedDuringFocus; // Resetear el tiempo que estaba pausado
-                    
-                    // No hay "skip" de accumulated break. Si la gente quiere volver al focus, usa RETURN. 
-                    // Si llega a 0, termina el break.
-                    
-                    // Para seguir la intención del usuario, si está en accumulated_break y presiona SKIP:
-                    // 1. Devuelve el tiempo restante a la acumulación total
-                    // 2. Reanuda el Focus desde donde se pausó.
-                    accumulatedTime = localState.accumulatedBreakTime + accumulated;
-                    
-                    updateServerState({
-                        isPaused: false, // Auto-start
-                        currentPhase: 'focus',
-                        startTime: Date.now() - localState.timePausedDuringFocus * 1000, // Reanudar el focus desde donde estaba
-                        totalTimeForPhase: settings.focusTime,
-                        remainingTimeAtPause: 0, 
-                        accumulatedBreakTime: accumulatedTime
-                    });
-                    
-                    // La lógica de Skip en Accumulated Break es compleja. Por simplicidad, 
-                    // si está en accumulated_break, el botón SKIP se oculta y solo aparece RETURN TO FOCUS.
-                    // Aquí llamaremos al mismo manejador que RETURN TO FOCUS.
-                    return; 
+        resetBtn.onclick = async () => {
+             if (!isAuthReady) {
+                sendNotification('Error', 'La conexión a la base de datos falló. Revisar la consola y la configuración.');
+                return;
+            }
+
+            const initialDuration = settings.focusTime;
+            clearInterval(intervalId);
+            intervalId = null;
+            await updateStateInFirestore({
+                status: 'stopped',
+                phase: 'focus',
+                startTime: null,
+                remainingSecondsAtPause: initialDuration,
+                currentCycle: 1,
+                accumulatedBreakSeconds: 0,
+                focusTimeRemainingBeforeFlex: 0,
+            });
+            updateUI();
+        };
+
+        skipFocusBtn.onclick = async () => {
+             if (!isAuthReady) {
+                sendNotification('Error', 'La conexión a la base de datos falló. Revisar la consola y la configuración.');
+                return;
+            }
+             // Only allow skipping focus if not currently in a break (or stopped)
+            if (timerState.phase !== 'focus' && timerState.phase !== 'flexibleBreak') {
+                statusMessageEl.textContent = 'Can only skip during Focus or Flexible Break.';
+                setTimeout(() => updateUI(), 2000);
+                return;
+            }
+
+            let newPhase, newCycle;
+            
+            // Standard focus skip: Move to break/long break
+            if (timerState.phase === 'focus') {
+                if (timerState.currentCycle >= settings.cycleCount) {
+                    newPhase = 'longBreak';
+                    newCycle = 1;
+                } else {
+                    newPhase = 'break';
+                    newCycle = timerState.currentCycle + 1;
+                }
+                
+                timerState.focusTimeRemainingBeforeFlex = 0; // Clear any saved focus time
+            } else if (timerState.phase === 'flexibleBreak') {
+                // If skipping while in a flexible break, just exit the break and go to the next scheduled phase (which is usually a Focus session)
+                newPhase = 'focus';
+            }
+            
+            const newDuration = getDurationForPhase(newPhase);
+
+            await updateStateInFirestore({
+                status: 'running',
+                phase: newPhase,
+                currentCycle: newCycle,
+                startTime: serverTimestamp(),
+                remainingSecondsAtPause: newDuration,
+                focusTimeRemainingBeforeFlex: 0,
+                accumulatedBreakSeconds: timerState.accumulatedBreakSeconds,
+            });
+        };
+
+        skipBreakBtn.onclick = async () => {
+             if (!isAuthReady) {
+                sendNotification('Error', 'La conexión a la base de datos falló. Revisar la consola y la configuración.');
+                return;
+            }
+            // Only allow skipping if currently in a break phase (short, long, or flexible)
+            if (timerState.phase !== 'break' && timerState.phase !== 'longBreak' && timerState.phase !== 'flexibleBreak') {
+                statusMessageEl.textContent = 'Can only skip a Break phase.';
+                setTimeout(() => updateUI(), 2000);
+                return;
+            }
+
+            // --- Flexible Break Logic (Skip) ---
+            let accumulated = timerState.accumulatedBreakSeconds;
+            let currentBreakDuration = 0;
+
+            if (timerState.phase === 'break' && timerState.currentCycle <= settings.cycleCount) {
+                // Accumulate the standard short break time
+                currentBreakDuration = settings.shortBreakTime;
+                accumulated += currentBreakDuration;
+            } else if (timerState.phase === 'longBreak') {
+                // Long breaks are not accumulated, just skipped to the next phase
+                statusMessageEl.textContent = 'Long Break cannot be accumulated, skipping normally.';
+            } else if (timerState.phase === 'flexibleBreak') {
+                // If skipping a flexible break, the time is already accumulated, we just transition
+            }
+            
+            // Transition immediately to Focus and auto-start
+            const newPhase = 'focus';
+            const newDuration = settings.focusTime;
+            
+            await updateStateInFirestore({
+                status: 'running',
+                phase: newPhase,
+                startTime: serverTimestamp(),
+                remainingSecondsAtPause: newDuration,
+                accumulatedBreakSeconds: accumulated,
+                focusTimeRemainingBeforeFlex: 0,
+            });
+        };
+
+        // --- FLEXIBLE BREAK CONTROLS ---
+
+        /**
+         * Logic to allow taking accumulated break time during a Focus session.
+         */
+        takeBreakBtn.onclick = async () => {
+             if (!isAuthReady) {
+                sendNotification('Error', 'La conexión a la base de datos falló. Revisar la consola y la configuración.');
+                return;
+            }
+            if (timerState.accumulatedBreakSeconds <= 0) return;
+            if (timerState.phase !== 'focus' && timerState.status !== 'paused') {
+                statusMessageEl.textContent = 'Must be in Focus to take an accumulated break.';
+                setTimeout(() => updateUI(), 2000);
+                return;
+            }
+            
+            // 1. Calculate remaining Focus time to save
+            const remainingFocusTime = timerState.status === 'running' ? calculateRemainingTime(Date.now()) : timerState.remainingSecondsAtPause;
+            
+            // 2. Set new state for Flexible Break
+            const accumulatedDuration = timerState.accumulatedBreakSeconds;
+
+            // 3. Update Firestore
+            await updateStateInFirestore({
+                status: 'running',
+                phase: 'flexibleBreak',
+                startTime: serverTimestamp(),
+                remainingSecondsAtPause: accumulatedDuration,
+                focusTimeRemainingBeforeFlex: remainingFocusTime, // Save focus time
+                accumulatedBreakSeconds: 0, // Use up all accumulated time
+            });
+        };
+
+        /**
+         * Logic to return to Focus while in a Flexible Break, saving the unused break time.
+         */
+        returnToFocusBtn.onclick = async () => {
+             if (!isAuthReady) {
+                sendNotification('Error', 'La conexión a la base de datos falló. Revisar la consola y la configuración.');
+                return;
+            }
+            if (timerState.phase !== 'flexibleBreak') return;
+            
+            // 1. Calculate the remaining break time to re-accumulate
+            const remainingBreakTime = timerState.status === 'running' ? calculateRemainingTime(Date.now()) : timerState.remainingSecondsAtPause;
+
+            // 2. Restore Focus state
+            const restoredFocusTime = timerState.focusTimeRemainingBeforeFlex;
+
+            // 3. Update Firestore
+            await updateStateInFirestore({
+                status: 'running',
+                phase: 'focus',
+                startTime: serverTimestamp(),
+                remainingSecondsAtPause: restoredFocusTime, // Restore saved focus time
+                accumulatedBreakSeconds: remainingBreakTime, // Save unused break time
+                focusTimeRemainingBeforeFlex: 0, // Clear the saved remaining time
+            });
+        };
+
+        function updateFlexibleBreakUI() {
+            // Check if controls should be visible at all
+            const isFlexVisible = timerState.accumulatedBreakSeconds > 0 || timerState.phase === 'flexibleBreak';
+            
+            if (isFlexVisible) {
+                flexBreakControlsEl.classList.remove('hidden');
+                
+                // Display accumulated time (regardless of current phase)
+                const accMinutes = String(Math.floor(timerState.accumulatedBreakSeconds / 60)).padStart(2, '0');
+                const accSeconds = String(timerState.accumulatedBreakSeconds % 60).padStart(2, '0');
+                accumulatedTimeDisplayEl.textContent = `Accumulated Break Time: ${accMinutes}:${accSeconds}`;
+
+                if (timerState.phase === 'focus' || timerState.status === 'paused') {
+                    // Show TAKE BREAK button only during Focus/Paused if there is accumulated time
+                    takeBreakBtn.classList.remove('hidden');
+                    takeBreakBtn.disabled = timerState.accumulatedBreakSeconds === 0;
+                    returnToFocusBtn.classList.add('hidden');
+                } else if (timerState.phase === 'flexibleBreak') {
+                    // Show RETURN TO FOCUS button only during Flexible Break
+                    takeBreakBtn.classList.add('hidden');
+                    returnToFocusBtn.classList.remove('hidden');
+                } else {
+                    // Hide controls during standard breaks
+                    takeBreakBtn.classList.add('hidden');
+                    returnToFocusBtn.classList.add('hidden');
                 }
 
-                bell.play();
-                updateServerState({
-                    isPaused: false, // Auto-start
-                    currentPhase: 'focus',
-                    startTime: Date.now(),
-                    totalTimeForPhase: settings.focusTime,
-                    accumulatedBreakTime: accumulatedTime,
-                    remainingTimeAtPause: 0 // No aplica
-                });
-            }
-        };
-
-        /**
-         * Maneja el click en Reset.
-         */
-        resetBtn.onclick = () => {
-             if (confirm('Are you sure you want to reset the entire timer? All progress and accumulated break time will be lost.')) {
-                // Reiniciar estado en la base de datos
-                const initialTotalTime = settings.focusTime;
-                updateServerState({
-                    isPaused: true,
-                    currentPhase: 'focus',
-                    remainingTimeAtPause: initialTotalTime, 
-                    accumulatedBreakTime: 0, 
-                    currentCycle: 1,
-                    startTime: Date.now(),
-                    totalTimeForPhase: initialTotalTime
-                });
-                clearInterval(localState.timerInterval);
-            }
-        };
-
-
-        // ====================================================================
-        // LÓGICA DE BREAK FLEXIBLE
-        // ====================================================================
-        
-        /**
-         * Maneja el click para tomar el Break Acumulado durante un Focus.
-         */
-        takeBreakBtn.onclick = () => {
-            if (localState.currentPhase === 'focus' && localState.accumulatedBreakTime > 0) {
-                // 1. Pausar el Focus actual
-                const timePausedDuringFocus = Math.ceil(localState.remainingTime);
-                
-                // 2. Cambiar a accumulated_break
-                const breakTime = localState.accumulatedBreakTime;
-                
-                updateServerState({
-                    isPaused: false, // Auto-start
-                    currentPhase: 'accumulated_break',
-                    startTime: Date.now(),
-                    totalTimeForPhase: breakTime, // El tiempo total de la fase es el acumulado
-                    accumulatedBreakTime: 0, // Se "vacía" la acumulación
-                    timePausedDuringFocus: timePausedDuringFocus, // Guardamos cuánto quedaba del focus
-                    remainingTimeAtPause: breakTime // Para la pausa
-                });
-            }
-        };
-        
-        /**
-         * Maneja el click para volver al Focus antes de que termine el Break Acumulado/Normal.
-         */
-        returnFocusBtn.onclick = () => {
-            if (localState.currentPhase === 'accumulated_break') {
-                // Volver al Focus, acumulando el tiempo restante.
-                const remainingBreakTime = Math.ceil(localState.remainingTime);
-                const reanudarFocusTime = localState.timePausedDuringFocus;
-                
-                updateServerState({
-                    isPaused: false, // Auto-start
-                    currentPhase: 'focus',
-                    startTime: Date.now() - (settings.focusTime - reanudarFocusTime) * 1000, // Reanudar el focus desde el tiempo pausado
-                    totalTimeForPhase: settings.focusTime,
-                    accumulatedBreakTime: localState.accumulatedBreakTime + remainingBreakTime, // Acumula el tiempo restante
-                    timePausedDuringFocus: 0,
-                    remainingTimeAtPause: 0
-                });
-            } else if (localState.currentPhase === 'break' || localState.currentPhase === 'longbreak') {
-                 // Volver al Focus, acumulando el tiempo restante del break normal/largo.
-                const remainingBreakTime = Math.ceil(localState.remainingTime);
-                
-                updateServerState({
-                    isPaused: false, // Auto-start
-                    currentPhase: 'focus',
-                    startTime: Date.now(),
-                    totalTimeForPhase: settings.focusTime,
-                    accumulatedBreakTime: localState.accumulatedBreakTime + remainingBreakTime, // Acumula el tiempo restante
-                    remainingTimeAtPause: 0
-                });
-            }
-        };
-
-        // ====================================================================
-        // MANEJO DE LA INTERFAZ (UI)
-        // ====================================================================
-
-        /**
-         * Convierte segundos a formato MM:SS.
-         */
-        function formatTime(seconds) {
-            const min = Math.floor(seconds / 60);
-            const sec = Math.floor(seconds % 60);
-            return `${min.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}`;
-        }
-        
-        /**
-         * Muestra el estado actual en la interfaz.
-         */
-        function updateUI() {
-            const { isPaused, currentPhase, remainingTime, accumulatedBreakTime, currentCycle } = localState;
-
-            // 1. Timer y Estado
-            timerDisplay.textContent = formatTime(remainingTime);
-            startPauseBtn.textContent = isPaused ? 'START' : 'PAUSE';
-            
-            let statusText = '';
-            let skipText = '';
-            let bodyColor = '';
-
-            switch (currentPhase) {
-                case 'focus':
-                    statusText = 'FOCUS TIME';
-                    skipText = 'SKIP FOCUS';
-                    bodyColor = '#c0392b';
-                    break;
-                case 'break':
-                    statusText = 'SHORT BREAK';
-                    skipText = 'SKIP BREAK';
-                    bodyColor = '#27ae60';
-                    break;
-                case 'longbreak':
-                    statusText = 'LONG BREAK';
-                    skipText = 'SKIP LONG BREAK';
-                    bodyColor = '#f39c12';
-                    break;
-                case 'accumulated_break':
-                    statusText = 'FLEXIBLE BREAK';
-                    skipText = ''; // Se oculta el skip en esta fase
-                    bodyColor = '#3498db';
-                    break;
+            } else {
+                flexBreakControlsEl.classList.add('hidden');
             }
 
-            statusMessage.textContent = statusText;
-            document.body.style.backgroundColor = bodyColor;
-            skipBtn.textContent = skipText;
+            // Hide normal skip break button during flex break
+            if (timerState.phase === 'flexibleBreak') {
+                skipBreakBtn.classList.add('hidden');
+            } else {
+                 skipBreakBtn.classList.remove('hidden');
+            }
 
-            // 2. Controles flexibles
-            takeBreakBtn.style.display = (currentPhase === 'focus' && accumulatedBreakTime > 0) ? 'inline-block' : 'none';
-            returnFocusBtn.style.display = (currentPhase === 'accumulated_break' || currentPhase === 'break' || currentPhase === 'longbreak') ? 'inline-block' : 'none';
-            
-            // Si es un break normal/largo, el botón Skip hace lo mismo que Return, pero con diferente texto.
-            // Para evitar confusión, solo ocultamos si es accumulated_break (donde solo tiene sentido RETURN).
-            skipBtn.style.display = (currentPhase === 'accumulated_break') ? 'none' : 'inline-block';
-            
-            // 3. Info Bar
-            let displayCycle = currentPhase === 'focus' ? currentCycle : currentCycle - 1;
-            if (displayCycle === 0) displayCycle = 1; // Ajuste para el inicio
-            cycleDisplay.textContent = `Cycle: ${displayCycle}/${settings.cycleCount}`;
-            accumulatedDisplay.textContent = `Accumulated Break: ${Math.floor(accumulatedBreakTime / 60)} min`;
-            
-            // 4. Notificaciones
-            updateNotification();
+            // Hide main timer controls during flexible break to emphasize flexible controls
+            if (timerState.phase === 'flexibleBreak') {
+                mainActionBtn.classList.add('hidden');
+                resetBtn.classList.add('hidden');
+                statusMessageEl.textContent = 'Taking a flexible break.';
+            } else {
+                mainActionBtn.classList.remove('hidden');
+                resetBtn.classList.remove('hidden');
+            }
         }
 
-        // ====================================================================
-        // NOTIFICACIONES Y SONIDO
-        // ====================================================================
 
-        /**
-         * Solicita permisos de notificación al cargar.
-         */
-        window.onload = () => {
-            if (Notification.permission !== 'granted' && Notification.permission !== 'denied') {
+        // --- NOTIFICATIONS & SOUND ---
+
+        function requestNotificationPermission() {
+            if (!("Notification" in window)) {
+                console.warn("This browser does not support desktop notification.");
+            } else if (Notification.permission !== "granted") {
                 Notification.requestPermission();
             }
-        };
+        }
 
-        /**
-         * Actualiza la notificación con el tiempo restante.
-         */
-        function updateNotification() {
-            if (Notification.permission === 'granted') {
-                const title = localState.currentPhase.toUpperCase().replace('_', ' ') + (localState.isPaused ? ' (Paused)' : ' (Running)');
-                const body = `Time Left: ${formatTime(localState.remainingTime)}. Accumulated: ${Math.floor(localState.accumulatedBreakTime / 60)} min.`;
+        function sendNotification(title, body) {
+            if (Notification.permission === "granted") {
+                try {
+                    // Check if the current window has focus to decide if a native notification is needed
+                    if (document.hidden) {
+                        new Notification(title, { body: body, icon: 'https://placehold.co/64x64/ef4444/white?text=P' });
+                    }
+                    
+                    // Always show the in-page notification bar
+                    const bar = document.getElementById('notification-bar');
+                    // Use a simple, non-phase-specific color for the bar if the body is about an error
+                    const bgColorClass = body.includes('Error') ? 'bg-red-800' : `${timerState.phase}-bg`; 
+                    bar.className = `notification-bar ${bgColorClass}`; // Reset and set class
+                    bar.textContent = `${title}: ${body}`;
+                    bar.classList.add('notification-show');
 
-                // El enfoque aquí es usar el 'tag' para reemplazar la notificación existente
-                new Notification(title, { 
-                    body: body,
-                    icon: 'https://www.gstatic.com/images/branding/product/2x/timer_48dp.png', // Icono genérico
-                    tag: 'pomodoro-timer' 
-                });
+                    setTimeout(() => {
+                        bar.classList.remove('notification-show');
+                    }, 5000);
+                    
+                } catch (e) {
+                    console.error("Error creating notification (likely due to sandbox/iframe restrictions):", e);
+                }
+            } else {
+                console.warn("Permission denied, notifications will not be sent.");
+                // Show a warning to the user
+                const bar = document.getElementById('notification-bar');
+                bar.textContent = 'Warning: Notification permission denied.';
+                bar.classList.add('notification-show', 'bg-red-900');
+                setTimeout(() => {
+                    bar.classList.remove('notification-show');
+                }, 5000);
+            }
+        }
+        
+        // Simple tone generator (no external files)
+        function playSound() {
+            try {
+                const AudioContext = window.AudioContext || window.webkitAudioContext;
+                const audioContext = new AudioContext();
+                const oscillator = audioContext.createOscillator();
+                const gainNode = audioContext.createGain();
+
+                oscillator.connect(gainNode);
+                gainNode.connect(audioContext.destination);
+
+                // Settings for a short, clear beep
+                oscillator.type = 'sine';
+                oscillator.frequency.setValueAtTime(440, audioContext.currentTime); // A4
+                gainNode.gain.setValueAtTime(0.5, audioContext.currentTime);
+
+                // Fade out quickly
+                gainNode.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + 0.5);
+
+                oscillator.start();
+                oscillator.stop(audioContext.currentTime + 0.5);
+
+            } catch(e) {
+                console.warn("Could not play sound:", e);
             }
         }
 
-        // ====================================================================
-        // MODAL DE CONFIGURACIÓN
-        // ====================================================================
+        // --- SETTINGS MODAL LOGIC ---
+        settingsBtn.onclick = () => settingsModal.style.display = 'block';
+        closeModalBtn.onclick = () => settingsModal.style.display = 'none';
 
-        document.getElementById('btn-settings').onclick = () => {
-            // Cargar los valores actuales
-            document.getElementById('focus-time').value = settings.focusTime / 60;
-            document.getElementById('short-break-time').value = settings.shortBreakTime / 60;
-            document.getElementById('long-break-time').value = settings.longBreakTime / 60;
-            document.getElementById('cycle-count').value = settings.cycleCount;
-            settingsModal.style.display = 'flex';
-        };
+        saveSettingsBtn.onclick = async () => {
+             if (!isAuthReady) {
+                sendNotification('Error', 'La conexión a la base de datos falló. No se puede guardar.');
+                return;
+            }
+            
+            const dbSettingsRef = doc(db, 'artifacts', appId, 'public/data', 'pomodoroSettings');
 
-        document.getElementById('btn-close-settings').onclick = () => {
-            settingsModal.style.display = 'none';
-        };
-
-        document.getElementById('btn-save-settings').onclick = () => {
-            // 1. Actualizar la BD de Settings
             const newSettings = {
                 focusTime: parseInt(document.getElementById('focus-time').value),
                 shortBreakTime: parseInt(document.getElementById('short-break-time').value),
@@ -765,33 +926,36 @@ function getServerTime() {
                 cycleCount: parseInt(document.getElementById('cycle-count').value)
             };
 
-            // Validación simple
+            // Simple validation
             if (newSettings.focusTime <= 0 || newSettings.shortBreakTime <= 0 || newSettings.longBreakTime <= 0 || newSettings.cycleCount <= 0) {
-                alert('All times and cycle count must be greater than 0.');
+                sendNotification('Error', 'All times and cycle count must be greater than 0.');
                 return;
             }
 
-            dbSettingsRef.set(newSettings).then(() => {
-                // 2. Actualizar el estado local de settings
-                settings.focusTime = newSettings.focusTime * 60;
-                settings.shortBreakTime = newSettings.shortBreakTime * 60;
-                settings.longBreakTime = newSettings.longBreakTime * 60;
-                settings.cycleCount = newSettings.cycleCount;
+            try {
+                // Use setDoc to overwrite settings (will trigger listener)
+                await setDoc(dbSettingsRef, newSettings);
                 
-                // 3. Reiniciar el temporizador para aplicar los nuevos tiempos
+                // 3. Force a reset to apply new times correctly (will sync via listener)
                 resetBtn.click(); 
                 settingsModal.style.display = 'none';
-            }).catch(error => {
-                alert('Error saving settings: ' + error.message);
-            });
+                sendNotification('Settings Saved', 'Timer has been reset to apply new settings.');
+            } catch (error) {
+                console.error('Error saving settings:', error);
+                sendNotification('Error', 'Error saving settings: ' + error.message);
+            }
         };
         
-        // Cierra el modal al hacer click fuera
+        // Close modal when clicking outside
         window.onclick = function(event) {
-            if (event.target == settingsModal) {
+            if (event.target === settingsModal) {
                 settingsModal.style.display = "none";
             }
         }
+
+        // Start everything
+        initFirebase();
+        requestNotificationPermission();
 
     </script>
 </body>
